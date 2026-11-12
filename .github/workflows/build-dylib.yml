@@ -1,50 +1,23 @@
 name: Build dylib
-
-on:
-  push:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
-
+on: [push, workflow_dispatch]
 jobs:
   build:
-    runs-on: macos-13
-
+    runs-on: macos-latest
     steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
-
-      - name: ⚙️ Build Dynamic Library
+      - uses: actions/checkout@v4
+      - name: Build
         run: |
-          set -e
           git clone --depth 1 https://github.com/facebook/fishhook.git
-          
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          FLAGS="-arch arm64 -O2 -isysroot $SDK -miphoneos-version-min=14.0 -I fishhook"
-          
-          echo "Compiling C engine..."
-          clang -c $FLAGS DiscordEcho.c -o echo.o
-          
-          echo "Compiling UI..."
-          clang -c $FLAGS -fobjc-arc DiscordEchoUI.m -o ui.o
-          
-          echo "Compiling fishhook..."
-          clang -c $FLAGS fishhook/fishhook.c -o fishhook.o
-          
-          echo "Linking dylib..."
+          F="-arch arm64 -O2 -isysroot $SDK -miphoneos-version-min=14.0 -I fishhook"
+          clang -c $F DiscordEcho.c -o echo.o
+          clang -c $F -fobjc-arc DiscordEchoUI.m -o ui.o
+          clang -c $F fishhook/fishhook.c -o fishhook.o
           clang -dynamiclib -arch arm64 -isysroot $SDK -miphoneos-version-min=14.0 \
-            -framework Foundation \
-            -framework UIKit \
-            -framework AudioToolbox \
-            -framework CoreGraphics \
-            -framework AVFoundation \
-            -framework UniformTypeIdentifiers \
+            -framework Foundation -framework UIKit -framework AudioToolbox -framework CoreGraphics -framework AVFoundation -framework UniformTypeIdentifiers \
             echo.o ui.o fishhook.o -o libdiscordecho.dylib
-            
-          echo "Signing binary..."
           codesign -f -s - libdiscordecho.dylib
-
-      - name: 📦 Upload Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: libdiscordecho
           path: libdiscordecho.dylib
