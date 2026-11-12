@@ -1,23 +1,35 @@
-name: Build dylib
-on: [push, workflow_dispatch]
+
+name: Build DiscordEcho
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
 jobs:
   build:
     runs-on: macos-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Download Source
+        uses: actions/checkout@v4
+
+      - name: Setup Theos
+        uses: waruhachi/theos-action@v2.6.3
+        with:
+          theos-src: theos/theos
+          theos-branch: master
+          sdks-src: theos/sdks
+          sdks-branch: master
+
       - name: Build
         run: |
-          git clone --depth 1 https://github.com/facebook/fishhook.git
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          F="-arch arm64 -O2 -isysroot $SDK -miphoneos-version-min=14.0 -I fishhook"
-          clang -c $F DiscordEcho.c -o echo.o
-          clang -c $F -fobjc-arc DiscordEchoUI.m -o ui.o
-          clang -c $F fishhook/fishhook.c -o fishhook.o
-          clang -dynamiclib -arch arm64 -isysroot $SDK -miphoneos-version-min=14.0 \
-            -framework Foundation -framework UIKit -framework AudioToolbox -framework CoreGraphics -framework AVFoundation -framework UniformTypeIdentifiers \
-            echo.o ui.o fishhook.o -o libdiscordecho.dylib
-          codesign -f -s - libdiscordecho.dylib
-      - uses: actions/upload-artifact@v4
+          make clean
+          make
+
+      - name: Upload Build
+        uses: actions/upload-artifact@v4
         with:
-          name: libdiscordecho
-          path: libdiscordecho.dylib
+          name: DiscordEcho-Build
+          path: .theos/obj/
