@@ -13,31 +13,28 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Build Environment
+      - name: Prepare Dependencies
         run: |
-          echo "Cloning fishhook..."
           git clone --depth 1 https://github.com/facebook/fishhook.git
 
-      - name: Compile and Link
+      - name: Compile & Link Binary
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          F="-arch arm64 -O2 -isysroot $SDK -miphoneos-version-min=14.0 -I fishhook"
+          FLAGS="-arch arm64 -O2 -isysroot $SDK -miphoneos-version-min=14.0 -I fishhook"
           
-          echo "Compiling C audio engine..."
-          clang -c $F DiscordEcho.c -o echo.o
+          clang -c $FLAGS DiscordEcho.c -o echo.o
+          clang -c $FLAGS -fobjc-arc DiscordEchoUI.m -o ui.o
+          clang -c $FLAGS fishhook/fishhook.c -o fishhook.o
           
-          echo "Compiling Objective-C UI controller..."
-          clang -c $F -fobjc-arc DiscordEchoUI.m -o ui.o
-          
-          echo "Compiling fishhook..."
-          clang -c $F fishhook/fishhook.c -o fishhook.o
-          
-          echo "Linking dynamic library..."
           clang -dynamiclib -arch arm64 -isysroot $SDK -miphoneos-version-min=14.0 \
-            -framework Foundation -framework UIKit -framework AudioToolbox -framework CoreGraphics -framework AVFoundation -framework UniformTypeIdentifiers \
+            -framework Foundation \
+            -framework UIKit \
+            -framework AudioToolbox \
+            -framework CoreGraphics \
+            -framework AVFoundation \
+            -framework UniformTypeIdentifiers \
             echo.o ui.o fishhook.o -o libdiscordecho.dylib
             
-          echo "Signing binary..."
           codesign -f -s - libdiscordecho.dylib
 
       - name: Upload Artifact
