@@ -1,8 +1,8 @@
-// DiscordEchoUI: قائمة عائمة بتصميم Creative EAX Console وأربعة تبويبات (الصدى، النبرة، المضخّم، الأغاني)
+code_content = r'''// DiscordEchoUI: قائمة عائمة بتصميم Creative EAX Console وأربعة تبويبات (الصدى، النبرة، المضخّم، الأغاني)
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
-#import <UniformTypeIdentifiers/UniformTypeIdentifiers>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -139,20 +139,16 @@ static NSString *EchoTime(float s) {
 @property (nonatomic, strong) UIView *panel;
 @property (nonatomic, strong) UISegmentedControl *tabs;
 @property (nonatomic, strong) NSArray<UIView *> *tabViews;
-// تبويب الصدى (EAX Console)
 @property (nonatomic, strong) UISwitch *effectsSwitch;
 @property (nonatomic, strong) UISegmentedControl *presetSeg;
 @property (nonatomic, strong) UILabel *amountLabel;
 @property (nonatomic, strong) UISlider *amountSlider;
-// النبرة
 @property (nonatomic, strong) UILabel *pitchLabel;
 @property (nonatomic, strong) UISlider *pitchSlider;
 @property (nonatomic) BOOL robot;
-// المضخّم
 @property (nonatomic, strong) UILabel *gainLabel;
 @property (nonatomic, strong) UISlider *gainSlider;
 @property (nonatomic, strong) UIProgressView *meter;
-// الأغاني
 @property (nonatomic, strong) UILabel *songLabel;
 @property (nonatomic, strong) UILabel *timeLabel;
 @property (nonatomic, strong) UISlider *seekSlider;
@@ -211,7 +207,6 @@ static NSString *EchoTime(float s) {
     int mloop         = EchoInt(kMusicLoopKey, 0);
     int mute          = EchoInt(kMuteKey, 0);
 
-    // الزر العائم 🎛️
     UIButton *fab = [UIButton buttonWithType:UIButtonTypeCustom];
     fab.frame = CGRectMake(20, 140, 52, 52);
     fab.backgroundColor = [UIColor colorWithWhite:0 alpha:0.65];
@@ -226,7 +221,6 @@ static NSString *EchoTime(float s) {
     [self.view addSubview:fab];
     self.fab = fab;
 
-    // اللوحة الرئيسية 📱 (Creative EAX Console Style)
     UIView *panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kPanelW, kPanelH)];
     panel.backgroundColor = [UIColor colorWithRed:0.12 green:0.14 blue:0.18 alpha:0.96];
     panel.layer.cornerRadius = 16;
@@ -236,7 +230,6 @@ static NSString *EchoTime(float s) {
     [self.view addSubview:panel];
     self.panel = panel;
 
-    // زر إغلاق (✕)
     UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     closeBtn.frame = CGRectMake(kPanelW - 38, 12, 26, 26);
     [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
@@ -247,7 +240,6 @@ static NSString *EchoTime(float s) {
     [closeBtn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
     [panel addSubview:closeBtn];
 
-    // التبويبات
     UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"EAX صدى", @"النبرة", @"المضخّم", @"🎵 أغاني"]];
     tabs.frame = CGRectMake(16, 12, kPanelW - 60, 34);
     tabs.selectedSegmentIndex = 0;
@@ -269,7 +261,6 @@ static NSString *EchoTime(float s) {
 
     CGFloat w = kPanelW - 32;
 
-    // ================= تبويب الصدى (Creative EAX Console) =================
     UILabel *lblSwitch = [self makeLabelAt:CGRectMake(16, 10, w - 60, 28) size:14 bold:YES alpha:1];
     lblSwitch.textAlignment = NSTextAlignmentLeft;
     lblSwitch.text = @"Enable Audio Effects";
@@ -308,7 +299,6 @@ static NSString *EchoTime(float s) {
     eaxHint.text = @"مطابق لبرنامج Creative EAX Console. اختر بيئة 'Haunted Cavern' للصدى المرعب والعميق، وتحكم بشدة التأثير بدقة.";
     [tabEcho addSubview:eaxHint];
 
-    // ================= تبويب النبرة =================
     self.pitchLabel = [self makeLabelAt:CGRectMake(16, 10, w, 26) size:16 bold:YES alpha:1];
     [tabPitch addSubview:self.pitchLabel];
     self.pitchSlider = [self makeSliderAt:CGRectMake(16, 42, w, 30) min:-12 max:12 value:pitch action:@selector(pitchChanged:)];
@@ -322,7 +312,6 @@ static NSString *EchoTime(float s) {
         [tabPitch addSubview:[self makeButton:names[i] frame:f tag:i action:@selector(presetTapped:)]];
     }
 
-    // ================= تبويب المضخّم =================
     self.gainLabel = [self makeLabelAt:CGRectMake(16, 10, w, 26) size:16 bold:YES alpha:1];
     [tabAmp addSubview:self.gainLabel];
     self.gainSlider = [self makeSliderAt:CGRectMake(16, 42, w, 30) min:100 max:800 value:gain action:@selector(gainChanged:)];
@@ -348,7 +337,6 @@ static NSString *EchoTime(float s) {
     [tabAmp addSubview:meter];
     self.meter = meter;
 
-    // ================= تبويب الأغاني =================
     self.songLabel = [self makeLabelAt:CGRectMake(16, 10, w, 34) size:13 bold:YES alpha:1];
     self.songLabel.text = @"ما فيه أغنية. اختر ملف صوتي من ملفات الجهاز";
     [tabMusic addSubview:self.songLabel];
@@ -376,7 +364,6 @@ static NSString *EchoTime(float s) {
     self.volSlider = [self makeSliderAt:CGRectMake(16, 234, w, 30) min:0 max:200 value:mvol action:@selector(volChanged:)];
     [tabMusic addSubview:self.volSlider];
 
-    // تطبيق القيم الأولية
     [self updateAmountLabel:amount];
     DiscordEcho_SetEnableEffects(enableEffects);
     DiscordEcho_SetEffectsAmount(amount);
@@ -410,14 +397,13 @@ static NSString *EchoTime(float s) {
 
 - (void)tabChanged:(UISegmentedControl *)sender {
     for (NSUInteger i = 0; i < self.tabViews.count; i++)
-        self.tabViews[i].hidden = ((NSInteger)i != sender.selectedSegmentIndex);
+    self.tabViews[i].hidden = ((NSInteger)i != sender.selectedSegmentIndex);
 }
 
 - (void)saveInt:(int)v key:(NSString *)k {
     [[NSUserDefaults standardUserDefaults] setInteger:v forKey:k];
 }
 
-// أزرار وتحكم الصدى
 - (void)effectsToggled:(UISwitch *)s {
     DiscordEcho_SetEnableEffects(s.on ? 1 : 0);
     [self saveInt:s.on ? 1 : 0 key:kEffectsKey];
@@ -433,7 +419,6 @@ static NSString *EchoTime(float s) {
     [self updateAmountLabel:v];
 }
 
-// النبرة والمضخم
 - (void)applyPitch:(int)st robot:(BOOL)robot {
     if (st < -12) st = -12;
     if (st > 12) st = 12;
@@ -469,10 +454,9 @@ static NSString *EchoTime(float s) {
     [self gainChanged:self.gainSlider];
 }
 
-// الأغاني
 - (void)chooseSong {
     UIDocumentPickerViewController *p =
-        [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeAudio] asCopy:YES];
+    [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeAudio] asCopy:YES];
     p.delegate = self;
     p.allowsMultipleSelection = NO;
     [self presentViewController:p animated:YES completion:nil];
@@ -536,8 +520,6 @@ static NSString *EchoTime(float s) {
     DiscordEcho_MusicSetVolume(v); [self saveInt:v key:kMusicVolKey]; [self updateVolLabel:v];
 }
 
-#pragma mark - المؤقت والموقع
-
 - (void)startTimer {
     if (self.timer) return;
     __weak EchoController *ws = self;
@@ -550,8 +532,8 @@ static NSString *EchoTime(float s) {
             if (pk > 1.0f) pk = 1.0f;
             s.meter.progress = pk;
             s.meter.progressTintColor = (pk > 0.98f) ? [UIColor systemRedColor]
-                                      : (pk > 0.8f)  ? [UIColor systemOrangeColor]
-                                                     : [UIColor systemGreenColor];
+            : (pk > 0.8f)  ? [UIColor systemOrangeColor]
+            : [UIColor systemGreenColor];
         } else if (tab == 3) {
             [s refreshMusicUI];
         }
@@ -610,8 +592,6 @@ static NSString *EchoTime(float s) {
 
 @end
 
-#pragma mark - تشغيل النافذة فوق ديسكورد
-
 static EchoWindow *gWin;
 
 static void echo_setup_window(void) {
@@ -626,27 +606,9 @@ static void echo_setup_window(void) {
     }
     if (!scene) return;
     gWin = [[EchoWindow alloc] initWithWindowScene:scene];
-    gWin.windowLevel = UIWindowLevelAlert + 100;
-    gWin.backgroundColor = UIColor.clearColor;
-    gWin.rootViewController = [EchoController new];
-    gWin.hidden = NO;
 }
+'''
 
-__attribute__((constructor))
-static void echo_ui_init(void) {
-    DiscordEcho_SetEnableEffects(EchoInt(kEffectsKey, 1));
-    DiscordEcho_SetEffectsAmount(EchoInt(kAmountKey, 50));
-    DiscordEcho_SetPreset(EchoInt(kPresetKey, 0));
-    DiscordEcho_SetGain(EchoInt(kGainKey, 100));
-    DiscordEcho_SetPitch(EchoInt(kPitchKey, 0));
-    DiscordEcho_SetRobot(EchoInt(kRobotKey, 0));
-    DiscordEcho_MusicSetVolume(EchoInt(kMusicVolKey, 100));
-    DiscordEcho_MusicSetLoop(EchoInt(kMusicLoopKey, 0));
-    DiscordEcho_SetVoiceMute(EchoInt(kMuteKey, 0));
-
-    [[NSNotificationCenter defaultCenter]
-        addObserverForName:UIApplicationDidBecomeActiveNotification
-                    object:nil
-                     queue:[NSOperationQueue mainQueue]
-                usingBlock:^(NSNotification *n) { echo_setup_window(); }];
-}
+with open("DiscordEchoUI.m", "w", encoding="utf-8") as f:
+    f.write(code_content)
+print("File created successfully.")
