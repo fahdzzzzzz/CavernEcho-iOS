@@ -13,12 +13,13 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Build Dynamic Library
+      - name: Setup Build Environment
         run: |
-          echo "Cloning fishhook dependency..."
+          echo "Cloning fishhook..."
           git clone --depth 1 https://github.com/facebook/fishhook.git
-          
-          echo "Locating iPhoneOS SDK..."
+
+      - name: Compile and Link
+        run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           F="-arch arm64 -O2 -isysroot $SDK -miphoneos-version-min=14.0 -I fishhook"
           
