@@ -10,15 +10,13 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Prepare Dependencies
+      - name: Build Dynamic Library
         run: |
           git clone --depth 1 https://github.com/facebook/fishhook.git
-
-      - name: Compile & Link Binary
-        run: |
+          
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           FLAGS="-arch arm64 -O2 -isysroot $SDK -miphoneos-version-min=14.0 -I fishhook"
           
