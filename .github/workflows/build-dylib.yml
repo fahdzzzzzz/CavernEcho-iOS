@@ -1,35 +1,50 @@
-
-name: Build DiscordEcho
+name: Build Discord Echo
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [ "main", "master" ]
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-13
 
     steps:
-      - name: Download Source
+      - name: 📥 Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Theos
-        uses: waruhachi/theos-action@v2.6.3
-        with:
-          theos-src: theos/theos
-          theos-branch: master
-          sdks-src: theos/sdks
-          sdks-branch: master
-
-      - name: Build
+      - name: ⚙️ Compile & Build
         run: |
-          make clean
-          make
+          set -e
+          git clone --depth 1 https://github.com/facebook/fishhook.git
+          
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          FLAGS="-arch arm64 -O2 -isysroot $SDK -miphoneos-version-min=14.0 -I fishhook"
+          
+          echo "Compiling C engine..."
+          clang -c $FLAGS DiscordEcho.c -o echo.o
+          
+          echo "Compiling UI..."
+          clang -c $FLAGS -fobjc-arc DiscordEchoUI.m -o ui.o
+          
+          echo "Compiling fishhook..."
+          clang -c $FLAGS fishhook/fishhook.c -o fishhook.o
+          
+          echo "Linking dylib..."
+          clang -dynamiclib -arch arm64 -isysroot $SDK -miphoneos-version-min=14.0 \
+            -framework Foundation \
+            -framework UIKit \
+            -framework AudioToolbox \
+            -framework CoreGraphics \
+            -framework AVFoundation \
+            -framework UniformTypeIdentifiers \
+            echo.o ui.o fishhook.o -o libdiscordecho.dylib
+            
+          echo "Signing binary..."
+          codesign -f -s - libdiscordecho.dylib
 
-      - name: Upload Build
+      - name: 📦 Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DiscordEcho-Build
-          path: .theos/obj/
+          name: libdiscordecho
+          path: libdiscordecho.dylib
