@@ -1,37 +1,40 @@
-// DiscordEcho: معالج صوت المايك داخل تطبيق ديسكورد (نسخة مطورة للصدى والأغاني)
+// DiscordEcho: معالج صوت المايك داخل تطبيق ديسكورد (نسخة مطورة بتأثيرات EAX Creative Console)
 #include <AudioToolbox/AudioToolbox.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "fishhook.h"
+#import "fishhook.h"
 
 #define MAX_RATE 48000
 #define MAX_BUFS 2
-#define LINE_LEN (MAX_RATE * 3) // توسيع مساحة الصدى ليعطي عمق زي الفيديو
+#define LINE_LEN (MAX_RATE * 3)
 #define MUSIC_TMP 8192
 
-static volatile int   g_level = 60;
-static volatile int   g_boost = 150;
-static volatile int   g_range = 70;
-static volatile int   g_cave  = 1;
-static volatile int   g_repeat = 1;
+static volatile int   g_enableEffects = 1;
+static volatile int   g_effectsAmount = 50; // 0 to 100
+static volatile int   g_presetMode = 0;     // 0: Haunted Cavern, 1: Cathedral, 2: Concert Hall
 static volatile int   g_gain  = 100;
 static volatile int   g_pitch = 0;
 static volatile int   g_robot = 0;
 static volatile int   g_voice_mute = 0;
 static volatile float g_peak  = 0.0f;
 
-void DiscordEcho_SetLevel(int v)  { g_level = v < 0 ? 0 : (v > 100 ? 100 : v); }
-void DiscordEcho_SetEchoBoost(int v) { g_boost = v < 100 ? 100 : (v > 400 ? 400 : v); }
-void DiscordEcho_SetRange(int v)  { g_range = v < 0 ? 0 : (v > 100 ? 100 : v); }
-void DiscordEcho_SetCave(int on)  { g_cave = on ? 1 : 0; }
-void DiscordEcho_SetRepeat(int on){ g_repeat = on ? 1 : 0; }
-void DiscordEcho_SetGain(int v)   { g_gain = v < 100 ? 100 : (v > 800 ? 800 : v); }
-void DiscordEcho_SetPitch(int v)  { g_pitch = v < -12 ? -12 : (v > 12 ? 12 : v); }
-void DiscordEcho_SetRobot(int on) { g_robot = on ? 1 : 0; }
-void DiscordEcho_SetVoiceMute(int on) { g_voice_mute = on ? 1 : 0; }
-float DiscordEcho_GetPeak(void)   { return g_peak; }
+void DiscordEcho_SetEnableEffects(int on) { g_enableEffects = on ? 1 : 0; }
+void DiscordEcho_SetEffectsAmount(int v)  { g_effectsAmount = v < 0 ? 0 : (v > 100 ? 100 : v); }
+void DiscordEcho_SetPreset(int preset)    { g_presetMode = preset < 0 ? 0 : (preset > 2 ? 2 : preset); }
+void DiscordEcho_SetGain(int v)           { g_gain = v < 100 ? 100 : (v > 800 ? 800 : v); }
+void DiscordEcho_SetPitch(int v)          { g_pitch = v < -12 ? -12 : (v > 12 ? 12 : v); }
+void DiscordEcho_SetRobot(int on)         { g_robot = on ? 1 : 0; }
+void DiscordEcho_SetVoiceMute(int on)     { g_voice_mute = on ? 1 : 0; }
+float DiscordEcho_GetPeak(void)           { return g_peak; }
+
+// توافق مع الواجهات القديمة
+void DiscordEcho_SetLevel(int v)  { g_effectsAmount = v; }
+void DiscordEcho_SetEchoBoost(int v) {}
+void DiscordEcho_SetRange(int v)  {}
+void DiscordEcho_SetCave(int on)  { g_enableEffects = on; }
+void DiscordEcho_SetRepeat(int on){}
 
 static float soft_limit(float y) {
     float a = y < 0 ? -y : y;
@@ -49,7 +52,6 @@ static int g_cleared[MAX_BUFS];
 #define RV_COMB_MAX 11025
 #define RV_AP_MAX   2048
 #define RV_DAMP     0.35f
-#define RV_WET      3.5f
 
 typedef struct {
     float comb[RV_COMBS][RV_COMB_MAX];
@@ -238,16 +240,14 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
     size_t n = ab->mDataByteSize / bytes_per;
     UInt32 chans = ab->mNumberChannels ? ab->mNumberChannels : 1;
 
-    int lvl = g_level;
+    int enable_fx = g_enableEffects && g_effectsAmount > 0;
     int gn = g_gain;
     int semis = g_pitch;
-    int cave = g_cave, rep = g_repeat;
 
-    int echo_on = lvl > 0 && (cave || rep);
     int ps_on = (semis != 0) && chans == 1;
     int robot_on = g_robot && chans == 1;
     int mute = g_voice_mute && mus != NULL;
-    int changed = echo_on || ps_on || robot_on || gn != 100 || mus != NULL;
+    int changed = enable_fx || ps_on || robot_on || gn != 100 || mus != NULL;
 
     if (!changed) {
         float pk = 0.0f;
@@ -262,7 +262,7 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
         return;
     }
 
-    if (!echo_on) {
+    if (!enable_fx) {
         if (!g_cleared[idx]) { clear_state(idx); g_cleared[idx] = 1; }
     } else {
         g_cleared[idx] = 0;
@@ -278,24 +278,29 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
     float rate = (float)g_fmt.mSampleRate;
     if (rate < 8000.0f) rate = 48000.0f;
 
-    float r = (float)g_range / 100.0f;
-    float rep_fb    = 0.45f + 0.45f * r;
-    float rep_delay = 0.30f + 0.25f * r;
-    float cave_fb   = 0.88f + 0.10f * r;
-    float cave_size = 1.6f + 0.9f * r;
-    float wet_gain  = ((float)lvl / 100.0f) * ((float)g_boost / 100.0f);
+    // إعدادات EAX Presets
+    float cave_fb = 0.88f;
+    float cave_size = 1.8f;
+    float wet_multiplier = 3.5f;
 
+    if (g_presetMode == 0) { // Haunted Cavern
+        cave_fb = 0.92f;
+        cave_size = 2.2f;
+        wet_multiplier = 4.0f;
+    } else if (g_presetMode == 1) { // Cathedral
+        cave_fb = 0.95f;
+        cave_size = 3.0f;
+        wet_multiplier = 4.5f;
+    } else if (g_presetMode == 2) { // Concert Hall
+        cave_fb = 0.65f;
+        cave_size = 1.2f;
+        wet_multiplier = 2.5f;
+    }
+
+    float amountFactor = (float)g_effectsAmount / 100.0f;
     float gain = (float)gn / 100.0f;
     float ratio = powf(2.0f, (float)semis / 12.0f);
     float rstep = 6.2831853f * 70.0f / rate;
-
-    size_t D = (size_t)(rep_delay * rate) * chans;
-    if (D < 1) D = 1;
-    if (D >= LINE_LEN) D = LINE_LEN - 1;
-
-    float *line = g_line[idx];
-    size_t p = g_pos[idx];
-    if (p >= D) p = 0;
 
     Reverb *rv = &g_rv[idx];
     int clen[RV_COMBS], alen[RV_APS];
@@ -324,20 +329,9 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
             if (g_robot_phase > 6.2831853f) g_robot_phase -= 6.2831853f;
         }
 
-        if (echo_on) {
-            float wet = 0.0f;
-            float rin = y;
-            if (rep) {
-                float d = line[p];
-                line[p] = y + rep_fb * d;
-                wet += d * 1.3f;
-                rin = y + 0.65f * d;
-                if (++p >= D) p = 0;
-            }
-            if (cave) {
-                wet += rv_process(rv, rin, cave_fb, clen, alen) * RV_WET;
-            }
-            y = y + wet * wet_gain;
+        if (enable_fx) {
+            float wet = rv_process(rv, y, cave_fb, clen, alen) * wet_multiplier;
+            y = (y * (1.0f - (0.6f * amountFactor))) + (wet * (0.6f * amountFactor));
         }
 
         y = soft_limit(y * gain);
@@ -352,7 +346,6 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
 
         if (++ch >= chans) { ch = 0; fi++; }
     }
-    if (echo_on) g_pos[idx] = p;
     update_peak(pk);
 }
 
