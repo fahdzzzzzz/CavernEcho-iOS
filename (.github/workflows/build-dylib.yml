@@ -1,23 +1,46 @@
-name: Build dylib
-on: [push, workflow_dispatch]
+name: Build Discord Echo dylib
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: macos-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Build
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build Dynamic Library
         run: |
+          echo "Cloning fishhook dependency..."
           git clone --depth 1 https://github.com/facebook/fishhook.git
+          
+          echo "Locating iPhoneOS SDK..."
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           F="-arch arm64 -O2 -isysroot $SDK -miphoneos-version-min=14.0 -I fishhook"
+          
+          echo "Compiling C audio engine..."
           clang -c $F DiscordEcho.c -o echo.o
+          
+          echo "Compiling Objective-C UI controller..."
           clang -c $F -fobjc-arc DiscordEchoUI.m -o ui.o
+          
+          echo "Compiling fishhook..."
           clang -c $F fishhook/fishhook.c -o fishhook.o
+          
+          echo "Linking dynamic library..."
           clang -dynamiclib -arch arm64 -isysroot $SDK -miphoneos-version-min=14.0 \
             -framework Foundation -framework UIKit -framework AudioToolbox -framework CoreGraphics -framework AVFoundation -framework UniformTypeIdentifiers \
             echo.o ui.o fishhook.o -o libdiscordecho.dylib
+            
+          echo "Signing binary..."
           codesign -f -s - libdiscordecho.dylib
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
           name: libdiscordecho
           path: libdiscordecho.dylib
