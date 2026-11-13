@@ -6,6 +6,7 @@
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <WebKit/WebKit.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -309,6 +310,206 @@ static NSString *EchoTime(float s) {
 }
 @end
 
+#pragma mark - متصفح داخلي: يلقط تنزيلات الصوت ويشغّلها
+
+static BOOL EchoIsAudioExt(NSString *ext) {
+    static NSSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ set = [NSSet setWithObjects:@"mp3", @"m4a", @"wav", @"aac", @"aif", @"aiff", @"caf", @"flac", nil]; });
+    return ext.length && [set containsObject:ext.lowercaseString];
+}
+
+@interface EchoBrowserController : UIViewController <WKNavigationDelegate, UITextFieldDelegate>
+@property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
+@property (nonatomic, strong) WKWebView *web;
+@property (nonatomic, strong) UITextField *addr;
+@property (nonatomic, strong) UIButton *closeBtn;
+@property (nonatomic, strong) UIButton *backBtn;
+@property (nonatomic, strong) NSArray<UIButton *> *quick;
+@property (nonatomic, strong) UILabel *status;
+@property (nonatomic, strong) NSMutableDictionary<NSValue *, NSURL *> *dests;
+@end
+
+@implementation EchoBrowserController
+
+- (UIButton *)pill:(NSString *)t action:(SEL)a tag:(NSInteger)tag {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+    [b setTitle:t forState:UIControlStateNormal];
+    [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    b.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+    b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14];
+    b.layer.cornerRadius = 9;
+    b.tag = tag;
+    [b addTarget:self action:a forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:b];
+    return b;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    self.view.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1];
+    self.dests = [NSMutableDictionary dictionary];
+
+    self.closeBtn = [self pill:@"✕ إغلاق" action:@selector(closeTapped) tag:0];
+    self.backBtn = [self pill:@"◀︎ رجوع" action:@selector(backTapped) tag:0];
+
+    self.addr = [[UITextField alloc] init];
+    self.addr.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+    self.addr.textColor = UIColor.whiteColor;
+    self.addr.layer.cornerRadius = 9;
+    self.addr.font = [UIFont systemFontOfSize:14];
+    self.addr.placeholder = @"اكتب موقع أو كلمة بحث";
+    self.addr.keyboardType = UIKeyboardTypeURL;
+    self.addr.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    self.addr.autocorrectionType = UITextAutocorrectionTypeNo;
+    self.addr.returnKeyType = UIReturnKeyGo;
+    self.addr.clearButtonMode = UITextFieldViewModeWhileEditing;
+    self.addr.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 10, 10)];
+    self.addr.leftViewMode = UITextFieldViewModeAlways;
+    self.addr.delegate = self;
+    [self.view addSubview:self.addr];
+
+    NSMutableArray *q = [NSMutableArray array];
+    NSArray *names = @[@"Pixabay", @"Archive", @"FMA"];
+    for (NSInteger i = 0; i < 3; i++) [q addObject:[self pill:names[i] action:@selector(quickTapped:) tag:i]];
+    self.quick = q;
+
+    WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
+    self.web = [[WKWebView alloc] initWithFrame:CGRectZero configuration:cfg];
+    self.web.navigationDelegate = self;
+    self.web.allowsBackForwardNavigationGestures = YES;
+    [self.view addSubview:self.web];
+
+    self.status = [[UILabel alloc] init];
+    self.status.textAlignment = NSTextAlignmentCenter;
+    self.status.font = [UIFont systemFontOfSize:12];
+    self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
+    self.status.numberOfLines = 2;
+    self.status.text = @"افتح أي موقع موسيقى وتضغط زر Download، وراح ألقطها وأشغّلها. (يوتيوب وسبوتيفاي ما يشتغلون)";
+    [self.view addSubview:self.status];
+
+    [self loadText:@"https://pixabay.com/music/"];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGRect b = self.view.bounds;
+    CGFloat top = 10;
+    self.backBtn.frame = CGRectMake(12, top, 84, 34);
+    self.closeBtn.frame = CGRectMake(b.size.width - 96, top, 84, 34);
+    CGFloat qx = 104, qw = (b.size.width - 104 - 104 - 12) / 3.0;
+    for (NSInteger i = 0; i < 3; i++) self.quick[i].frame = CGRectMake(qx + i * (qw + 6), top, qw, 34);
+    self.addr.frame = CGRectMake(12, 50, b.size.width - 24, 36);
+    CGFloat sh = 44;
+    self.web.frame = CGRectMake(0, 92, b.size.width, b.size.height - 92 - sh);
+    self.status.frame = CGRectMake(12, b.size.height - sh, b.size.width - 24, sh);
+}
+
+- (void)closeTapped { [self.web stopLoading]; [self dismissViewControllerAnimated:YES completion:nil]; }
+- (void)backTapped { if (self.web.canGoBack) [self.web goBack]; }
+
+- (void)quickTapped:(UIButton *)b {
+    NSArray *urls = @[@"https://pixabay.com/music/", @"https://archive.org/details/audio", @"https://freemusicarchive.org/"];
+    [self loadText:urls[b.tag]];
+}
+
+- (void)loadText:(NSString *)t {
+    t = [t stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (t.length == 0) return;
+    NSURL *u = nil;
+    if ([t hasPrefix:@"http://"] || [t hasPrefix:@"https://"]) u = [NSURL URLWithString:t];
+    else if ([t containsString:@"."] && ![t containsString:@" "]) u = [NSURL URLWithString:[@"https://" stringByAppendingString:t]];
+    else {
+        NSURLComponents *c = [NSURLComponents componentsWithString:@"https://duckduckgo.com/"];
+        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"q" value:t] ];
+        u = c.URL;
+    }
+    if (u) { self.addr.text = u.absoluteString; [self.web loadRequest:[NSURLRequest requestWithURL:u]]; }
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)tf {
+    [tf resignFirstResponder];
+    [self loadText:tf.text];
+    return YES;
+}
+
+// ----- لقط التنزيلات (iOS 14.5+) -----
+- (BOOL)canDownload {
+    if (@available(iOS 14.5, *)) return YES;
+    return NO;
+}
+
+- (void)webView:(WKWebView *)wv decidePolicyForNavigationAction:(WKNavigationAction *)a
+                                         decisionHandler:(void (^)(WKNavigationActionPolicy))h {
+    if ([self canDownload]) {
+        BOOL should = NO;
+        if ([a respondsToSelector:NSSelectorFromString(@"shouldPerformDownload")])
+            should = [[a valueForKey:@"shouldPerformDownload"] boolValue];
+        NSString *ext = a.request.URL.pathExtension;
+        if (should || EchoIsAudioExt(ext)) { h((WKNavigationActionPolicy)2); return; }   // 2 = تنزيل
+    }
+    h(WKNavigationActionPolicyAllow);
+}
+
+- (void)webView:(WKWebView *)wv decidePolicyForNavigationResponse:(WKNavigationResponse *)r
+                                                  decisionHandler:(void (^)(WKNavigationResponsePolicy))h {
+    if ([self canDownload]) {
+        NSString *mime = r.response.MIMEType.lowercaseString ?: @"";
+        NSString *ext = r.response.suggestedFilename.pathExtension;
+        BOOL audio = [mime hasPrefix:@"audio/"] || EchoIsAudioExt(ext) || EchoIsAudioExt(r.response.URL.pathExtension);
+        if (audio) { h((WKNavigationResponsePolicy)2); return; }                          // 2 = تنزيل
+    }
+    h(WKNavigationResponsePolicyAllow);
+}
+
+- (void)webView:(WKWebView *)wv navigationAction:(WKNavigationAction *)a didBecomeDownload:(id)d {
+    [d setDelegate:self];
+    self.status.text = @"⏳ بدأ التنزيل…";
+}
+- (void)webView:(WKWebView *)wv navigationResponse:(WKNavigationResponse *)r didBecomeDownload:(id)d {
+    [d setDelegate:self];
+    self.status.text = @"⏳ بدأ التنزيل…";
+}
+
+- (void)download:(id)d decideDestinationUsingResponse:(NSURLResponse *)resp suggestedFilename:(NSString *)name
+                                     completionHandler:(void (^)(NSURL *))ch {
+    NSString *fn = name.length ? name : @"song";
+    fn = [fn stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+    if (!fn.pathExtension.length) fn = [fn stringByAppendingString:@".mp3"];
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"echo_%u_%@", arc4random(), fn]];
+    NSURL *dest = [NSURL fileURLWithPath:path];
+    self.dests[[NSValue valueWithNonretainedObject:d]] = dest;
+    self.status.text = [NSString stringWithFormat:@"⏳ جاري تنزيل: %@", fn];
+    ch(dest);
+}
+
+- (void)downloadDidFinish:(id)d {
+    NSValue *k = [NSValue valueWithNonretainedObject:d];
+    NSURL *dest = self.dests[k];
+    [self.dests removeObjectForKey:k];
+    if (!dest) return;
+    if (!EchoIsAudioExt(dest.pathExtension)) {
+        [[NSFileManager defaultManager] removeItemAtURL:dest error:nil];
+        self.status.text = [NSString stringWithFormat:@"❌ هذا مو ملف صوت (%@)", dest.pathExtension];
+        return;
+    }
+    NSString *name = [[dest.lastPathComponent stringByDeletingPathExtension] copy];
+    void (^cb)(NSURL *, NSString *) = self.onPick;
+    [self dismissViewControllerAnimated:YES completion:^{ if (cb) cb(dest, name); }];
+}
+
+- (void)download:(id)d didFailWithError:(NSError *)e resumeData:(NSData *)rd {
+    [self.dests removeObjectForKey:[NSValue valueWithNonretainedObject:d]];
+    self.status.text = @"❌ فشل التنزيل. جرّب مرة ثانية أو موقع ثاني";
+}
+
+- (void)webView:(WKWebView *)wv didFinishNavigation:(WKNavigation *)n {
+    if (wv.URL) self.addr.text = wv.URL.absoluteString;
+}
+
+@end
+
 #pragma mark - بحث الأغاني (3 مصادر)
 
 // 0 = iTunes (مقاطع 30 ثانية لأغاني مشهورة)، 1 = Internet Archive (أغاني كاملة مرخّصة/عامة)، 2 = Audius (فنانين مستقلين)
@@ -336,7 +537,7 @@ static NSString *EchoTime(float s) {
     [self.closeBtn addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.closeBtn];
 
-    self.src = [[UISegmentedControl alloc] initWithItems:@[@"🎵 مشاهير", @"🆓 Archive", @"Audius", @"Openverse"]];
+    self.src = [[UISegmentedControl alloc] initWithItems:@[@"🎵 مشاهير", @"🆓 Archive", @"Audius"]];
     self.src.selectedSegmentIndex = 0;
     self.src.selectedSegmentTintColor = [UIColor colorWithWhite:1 alpha:0.28];
     NSDictionary *white = @{ NSForegroundColorAttributeName: UIColor.whiteColor,
@@ -391,8 +592,7 @@ static NSString *EchoTime(float s) {
     switch (self.src.selectedSegmentIndex) {
         case 0: self.status.text = @"أغاني مشهورة من iTunes. مقطع 30 ثانية لكل أغنية (فعّل «تكرار الأغنية»)"; break;
         case 1: self.status.text = @"أغاني كاملة من Internet Archive (موسيقى حرة ومرخّصة). المشاهير غالباً مو موجودين هنا"; break;
-        case 2: self.status.text = @"أغاني كاملة لفنانين مستقلين من Audius"; break;
-        default: self.status.text = @"Openverse: موسيقى كاملة مرخّصة (Creative Commons) من مواقع كثيرة. البحث بالإنجليزي أفضل"; break;
+        default: self.status.text = @"أغاني كاملة لفنانين مستقلين من Audius"; break;
     }
 }
 
@@ -433,10 +633,6 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
                           [NSURLQueryItem queryItemWithName:@"sort[]" value:@"downloads desc"],
                           [NSURLQueryItem queryItemWithName:@"rows" value:@"30"],
                           [NSURLQueryItem queryItemWithName:@"output" value:@"json"] ];
-    } else if (source == 3) {
-        c = [NSURLComponents componentsWithString:@"https://api.openverse.org/v1/audio/"];
-        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"q" value:q],
-                          [NSURLQueryItem queryItemWithName:@"page_size" value:@"40"] ];
     } else {
         c = [NSURLComponents componentsWithString:@"https://api.audius.co/v1/tracks/search"];
         c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"query" value:q],
@@ -477,24 +673,6 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
                     if ([ti isKindOfClass:NSArray.class]) ti = [(NSArray *)ti firstObject];
                     [out addObject:@{ @"title": EchoStr(ti).length ? EchoStr(ti) : ident, @"artist": EchoStr(cr),
                                       @"dur": @0, @"archive": ident }];
-                }
-            } else if (source == 3) {
-                id arr = root[@"results"];
-                if ([arr isKindOfClass:NSArray.class]) for (id it in (NSArray *)arr) {
-                    if (![it isKindOfClass:NSDictionary.class]) continue;
-                    NSString *u = EchoStr(it[@"url"]);
-                    if (u.length == 0) continue;
-                    NSString *ft = EchoStr(it[@"filetype"]).lowercaseString;
-                    NSString *ext = nil;
-                    NSString *lu = [[u componentsSeparatedByString:@"?"].firstObject lowercaseString];
-                    for (NSString *e in @[@"mp3", @"m4a", @"wav", @"aac"]) {
-                        if ([ft isEqualToString:e] || [lu hasSuffix:[@"." stringByAppendingString:e]]) { ext = e; break; }
-                    }
-                    if (!ext) continue;                       // ogg وغيره ما يفتح في الآيفون
-                    [out addObject:@{ @"title": EchoStr(it[@"title"]).length ? EchoStr(it[@"title"]) : @"بدون عنوان",
-                                      @"artist": EchoStr(it[@"creator"]),
-                                      @"dur": @(EchoNum(it[@"duration"]) / 1000.0f),
-                                      @"url": u, @"ext": ext }];
                 }
             } else {
                 id arr = root[@"data"];
@@ -957,12 +1135,13 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
 
     // ================= تبويب الأغاني =================
     self.songLabel = [self makeLabelAt:CGRectMake(16, 4, w, 34) size:13 bold:YES alpha:1];
-    self.songLabel.text = @"ما فيه أغنية. ابحث عن أغنية أو اختر ملف صوت";
+    self.songLabel.text = @"ما فيه أغنية. ابحث أو افتح المتصفح أو اختر ملف";
     [tabMusic addSubview:self.songLabel];
 
-    CGFloat sbw = (w - 8) / 2.0;
-    [tabMusic addSubview:[self makeButton:@"🔍 ابحث عن أغنية" frame:CGRectMake(16, 42, sbw, 34) tag:0 action:@selector(searchSong)]];
-    [tabMusic addSubview:[self makeButton:@"📂 من الملفات" frame:CGRectMake(16 + sbw + 8, 42, sbw, 34) tag:0 action:@selector(chooseSong)]];
+    CGFloat sbw = (w - 16) / 3.0;
+    [tabMusic addSubview:[self makeButton:@"🔍 بحث" frame:CGRectMake(16, 42, sbw, 34) tag:0 action:@selector(searchSong)]];
+    [tabMusic addSubview:[self makeButton:@"🌐 متصفح" frame:CGRectMake(16 + sbw + 8, 42, sbw, 34) tag:0 action:@selector(browseSong)]];
+    [tabMusic addSubview:[self makeButton:@"📂 ملفات" frame:CGRectMake(16 + 2 * (sbw + 8), 42, sbw, 34) tag:0 action:@selector(chooseSong)]];
 
     UISlider *seek = [self makeSliderAt:CGRectMake(16, 84, w, 28) min:0 max:1 value:0 action:@selector(seekChanged:)];
     [seek addTarget:self action:@selector(seekBegan:) forControlEvents:UIControlEventTouchDown];
@@ -986,7 +1165,7 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     [self addToggle:T_SONGECHO to:tabMusic x:16 y:y width:w]; y += 36;
     [self addToggle:T_MONITOR  to:tabMusic x:16 y:y width:w]; y += 40;
     y = [self addSlider:S_MONVOL to:tabMusic y:y];
-    y = [self addHint:@"اللي معك في ديسكورد يسمعون الأغنية من مايكك مع الصدى.\n«أنا أسمع الأغنية» توصّلها لسماعتك أنت. الأفضل تستخدم سماعات، وإلا المايك يلتقطها من السبيكر ويدخل صدى زيادة.\nالبحث: مشاهير (مقاطع 30 ثانية)، Internet Archive، Audius، أو Openverse (كاملة ومرخّصة)."
+    y = [self addHint:@"اللي معك في ديسكورد يسمعون الأغنية من مايكك مع الصدى.\n«أنا أسمع الأغنية» توصّلها لسماعتك أنت. الأفضل تستخدم سماعات، وإلا المايك يلتقطها من السبيكر ويدخل صدى زيادة.\n🌐 المتصفح: تفتح أي موقع موسيقى وتضغط Download فيلقط التطبيق الأغنية ويشغّلها."
                    to:tabMusic y:y height:92];
     tabMusic.contentSize = CGSizeMake(kPanelW, y + 10);
 
@@ -1133,6 +1312,14 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     NSURL *url = urls.firstObject;
     if (url) [self loadSongAtURL:url name:url.lastPathComponent cleanup:NO];
+}
+
+- (void)browseSong {
+    EchoBrowserController *vc = [EchoBrowserController new];
+    __weak EchoController *ws = self;
+    vc.onPick = ^(NSURL *url, NSString *name) { [ws loadSongAtURL:url name:name cleanup:YES]; };
+    vc.modalPresentationStyle = UIModalPresentationFullScreen;
+    [self presentViewController:vc animated:YES completion:nil];
 }
 
 - (void)searchSong {
