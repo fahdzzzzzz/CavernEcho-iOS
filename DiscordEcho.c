@@ -50,6 +50,10 @@ static volatile int   g_robot = 0;      // 0/1
 static volatile int   g_voice_mute = 0; // كتم صوتي أثناء الأغنية
 static volatile float g_peak  = 0.0f;   // مستوى المايك 0..1
 
+static volatile int   g_selfmon = 0;      // أسمع صوتي (بعد المعالجة)
+static volatile int   g_selfmon_vol = 100;// مستوى سماع صوتي 0..200
+static volatile unsigned g_render_count = 0; // عدّاد دفعات المايك (يدل أن المايك شغال)
+
 static int clampi(int v, int a, int b) { return v < a ? a : (v > b ? b : v); }
 
 void DiscordEcho_SetLevel(int v)  { g_level = clampi(v, 0, 100); }
@@ -78,6 +82,9 @@ void DiscordEcho_SetPitch(int v)  { g_pitch = clampi(v, -12, 12); }
 void DiscordEcho_SetRobot(int on) { g_robot = on ? 1 : 0; }
 void DiscordEcho_SetVoiceMute(int on) { g_voice_mute = on ? 1 : 0; }
 float DiscordEcho_GetPeak(void)   { return g_peak; }
+void DiscordEcho_SetSelfMonitor(int on) { g_selfmon = on ? 1 : 0; }
+void DiscordEcho_SetSelfMonitorVolume(int v) { g_selfmon_vol = clampi(v, 0, 200); }
+unsigned DiscordEcho_RenderCount(void) { return g_render_count; }
 
 // ---------- حد ناعم: يرفع الصوت بدون ما يقطعه ----------
 static float soft_limit(float y) {
@@ -360,6 +367,8 @@ static volatile double g_mpos = 0.0;     // موضع التشغيل بالعين
 static volatile double g_mseek = -1.0;   // طلب قفز (-1 = ما فيه)
 static float g_mtmp[MUSIC_TMP];
 static float g_sout[MUSIC_TMP];
+static float g_voice[MUSIC_TMP];   // صوتك بعد المعالجة (للمراقبة)
+static float g_smix[MUSIC_TMP];    // مزيج المراقبة (أغنية + صوتك)
 
 // تأخذ ملكية المصفوفة (malloc). تتحرر لما تتحمّل أغنية ثانية.
 int DiscordEcho_MusicLoad(float *samples, size_t count) {
@@ -444,6 +453,7 @@ static float g_mon[MON_LEN];
 static volatile unsigned g_mon_w = 0, g_mon_r = 0;
 static volatile float g_mon_rate = 48000.0f;
 static double g_mon_frac = 0.0;
+static int g_mon_primed = 0;
 
 static void mon_write(const float *src, UInt32 frames, float rate, float vol) {
     g_mon_rate = rate;
@@ -463,9 +473,18 @@ void DiscordEcho_MonitorRead(float *out, unsigned n, double outRate) {
     unsigned avail = w - r;
     // لو متأخر كثير، نرجع قريب من الحاضر
     unsigned maxLag = (unsigned)(g_mon_rate * 0.5f);
-    if (avail > maxLag) { r = w - (unsigned)(g_mon_rate * 0.1f); avail = w - r; g_mon_frac = 0.0; }
+    if (avail > maxLag) { r = w - (unsigned)(g_mon_rate * 0.08f); avail = w - r; g_mon_frac = 0.0; }
+    // نستنى مخزن صغير (30ms) قبل ما نبدأ، عشان ما يتقطع الصوت
+    if (!g_mon_primed) {
+        if (avail < (unsigned)(g_mon_rate * 0.03f)) {
+            for (unsigned i = 0; i < n; i++) out[i] = 0.0f;
+            g_mon_r = r;
+            return;
+        }
+        g_mon_primed = 1;
+    }
     for (unsigned i = 0; i < n; i++) {
-        if (avail < 3) { out[i] = 0.0f; continue; }
+        if (avail < 3) { out[i] = 0.0f; g_mon_primed = 0; continue; }
         float a = g_mon[r & (MON_LEN - 1)];
         float b = g_mon[(r + 1) & (MON_LEN - 1)];
         out[i] = a + (float)g_mon_frac * (b - a);
@@ -496,7 +515,7 @@ static int echo_enabled(void) {
     return g_level > 0 && (g_mode > 0 || g_cave || g_repeat);
 }
 
-static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mus_frames) {
+static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mus_frames, float *voice) {
     int is_float = (g_fmt.mFormatFlags & kAudioFormatFlagIsFloat) != 0;
     UInt32 bits = g_fmt.mBitsPerChannel;
     if (!((is_float && bits == 32) || (!is_float && bits == 16))) return;
@@ -520,6 +539,7 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
         for (size_t i = 0; i < n; i++) {
             float x = is_float ? ((float *)ab->mData)[i]
                                : ((int16_t *)ab->mData)[i] / 32768.0f;
+            if (voice && (i % chans) == 0 && (i / chans) < mus_frames) voice[i / chans] = x;
             float a = x < 0 ? -x : x;
             if (a > pk) pk = a;
         }
@@ -572,6 +592,7 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
         if (echo_on) y = y + echo_run(ctx, y, &P) * P.wet_gain;
 
         y = soft_limit(y * gain);
+        if (voice && ch == 0 && fi < mus_frames) voice[fi] = y;
 
         float a = y < 0 ? -y : y;
         if (a > pk) pk = a;
@@ -607,6 +628,8 @@ static OSStatus my_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
     float rate = (float)g_fmt.mSampleRate;
     if (rate < 8000.0f) rate = 48000.0f;
 
+    g_render_count++;
+
     // ----- الأغنية: تمر على صدى خاص فيها، وبعدين تنزل للمايك وللمراقبة -----
     int mus_on = music_generate(g_mtmp, frames, rate);
     int have_song = 0;
@@ -633,12 +656,28 @@ static OSStatus my_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
             clear_ctx(SONG_CTX);
             g_song_cleared = 1;
         }
-        if (g_monitor) mon_write(have_song ? g_sout : NULL, frames, rate, (float)g_mon_vol / 100.0f);
     }
 
+    int self_on = g_selfmon && frames <= MUSIC_TMP;
+    if (self_on) memset(g_voice, 0, frames * sizeof(float));
     for (UInt32 b = 0; b < io->mNumberBuffers && b < MAX_BUFS; b++) {
         if (io->mBuffers[b].mData)
-            process_buffer((int)b, &io->mBuffers[b], have_song ? g_sout : NULL, frames);
+            process_buffer((int)b, &io->mBuffers[b], have_song ? g_sout : NULL, frames,
+                           (b == 0 && self_on) ? g_voice : NULL);
+    }
+
+    // ----- مراقبة: أنت تسمع الأغنية (مع الصدى) و/أو صوتك بعد المعالجة -----
+    if (frames <= MUSIC_TMP && (g_monitor || self_on)) {
+        float sv = (float)g_mon_vol / 100.0f;
+        float vv = (float)g_selfmon_vol / 100.0f;
+        int song_mon = g_monitor && have_song;
+        for (UInt32 i = 0; i < frames; i++) {
+            float m = 0.0f;
+            if (song_mon) m += g_sout[i] * sv;
+            if (self_on)  m += g_voice[i] * vv;
+            g_smix[i] = soft_limit(m);
+        }
+        mon_write(g_smix, frames, rate, 1.0f);
     }
     return st;
 }
