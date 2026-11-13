@@ -4,7 +4,7 @@
 //       شدة عامة، مضخّم، مدى، شدة الكهف، شدة التكرار، سرعة/تشتيت/عدد التكرارات
 //   - موازن ترددات (EQ) للصدى + تغميق الذيل + تنعيم الموجة (modulation)
 //   - مودات صدى جاهزة، كل واحد لحاله: ديلاي، ديلاي شريط، غرفة، قاعة، ستاديوم، فضاء
-//   - تضخيم الصوت 100%..800% مع حد ناعم
+//   - تضخيم الصوت 100%..1600% مع حد ناعم
 //   - مشغّل أغنية: تتمزج داخل المايك + يطبّق عليها الصدى + تقدر تسمعها أنت (مراقبة)
 // يعمل عبر fishhook: يستبدل AudioUnitRender ويعدّل بيانات المايك قبل ما يرسلها التطبيق.
 
@@ -44,7 +44,7 @@ static volatile int   g_mode = 0;       // 0 = كهف مسكون (حسب الأ�
 static volatile int   g_song_echo = 1;  // تطبيق الصدى على الأغنية
 static volatile int   g_monitor = 0;    // أنت تسمع الأغنية
 static volatile int   g_mon_vol = 100;  // مستوى المراقبة 0..200
-static volatile int   g_gain  = 100;    // تضخيم الصوت 100..800 (%)
+static volatile int   g_gain  = 100;    // تضخيم الصوت 100..1600 (%)
 static volatile int   g_pitch = 0;      // نغمات -12..12
 static volatile int   g_robot = 0;      // 0/1
 static volatile int   g_voice_mute = 0; // كتم صوتي أثناء الأغنية
@@ -77,7 +77,7 @@ void DiscordEcho_SetMode(int v)   { g_mode = clampi(v, 0, 6); }
 void DiscordEcho_SetSongEcho(int on) { g_song_echo = on ? 1 : 0; }
 void DiscordEcho_SetMonitor(int on) { g_monitor = on ? 1 : 0; }
 void DiscordEcho_SetMonitorVolume(int v) { g_mon_vol = clampi(v, 0, 200); }
-void DiscordEcho_SetGain(int v)   { g_gain = clampi(v, 100, 800); }
+void DiscordEcho_SetGain(int v)   { g_gain = clampi(v, 100, 1600); }
 void DiscordEcho_SetPitch(int v)  { g_pitch = clampi(v, -12, 12); }
 void DiscordEcho_SetRobot(int on) { g_robot = on ? 1 : 0; }
 void DiscordEcho_SetVoiceMute(int on) { g_voice_mute = on ? 1 : 0; }
