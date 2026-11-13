@@ -319,9 +319,11 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     return ext.length && [set containsObject:ext.lowercaseString];
 }
 
-@interface EchoBrowserController : UIViewController <WKNavigationDelegate, UITextFieldDelegate>
+@interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
-@property (nonatomic, strong) WKWebView *web;
+@property (nonatomic, strong) NSMutableArray<WKWebView *> *tabs;
+@property (nonatomic) NSInteger cur;
+@property (nonatomic, strong) UIScrollView *tabBar;
 @property (nonatomic, strong) UITextField *addr;
 @property (nonatomic, strong) UIButton *closeBtn;
 @property (nonatomic, strong) UIButton *backBtn;
@@ -332,6 +334,8 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 
 @implementation EchoBrowserController
 
+- (WKWebView *)web { return (self.cur >= 0 && self.cur < (NSInteger)self.tabs.count) ? self.tabs[self.cur] : nil; }
+
 - (UIButton *)pill:(NSString *)t action:(SEL)a tag:(NSInteger)tag {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
     [b setTitle:t forState:UIControlStateNormal];
@@ -341,7 +345,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     b.layer.cornerRadius = 9;
     b.tag = tag;
     [b addTarget:self action:a forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:b];
     return b;
 }
 
@@ -350,9 +353,13 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     self.view.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1];
     self.dests = [NSMutableDictionary dictionary];
+    self.tabs = [NSMutableArray array];
+    self.cur = -1;
 
     self.closeBtn = [self pill:@"✕ إغلاق" action:@selector(closeTapped) tag:0];
     self.backBtn = [self pill:@"◀︎ رجوع" action:@selector(backTapped) tag:0];
+    [self.view addSubview:self.closeBtn];
+    [self.view addSubview:self.backBtn];
 
     self.addr = [[UITextField alloc] init];
     self.addr.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
@@ -372,23 +379,26 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 
     NSMutableArray *q = [NSMutableArray array];
     NSArray *names = @[@"Pixabay", @"Archive", @"FMA"];
-    for (NSInteger i = 0; i < 3; i++) [q addObject:[self pill:names[i] action:@selector(quickTapped:) tag:i]];
+    for (NSInteger i = 0; i < 3; i++) {
+        UIButton *b = [self pill:names[i] action:@selector(quickTapped:) tag:i];
+        [self.view addSubview:b];
+        [q addObject:b];
+    }
     self.quick = q;
 
-    WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
-    self.web = [[WKWebView alloc] initWithFrame:CGRectZero configuration:cfg];
-    self.web.navigationDelegate = self;
-    self.web.allowsBackForwardNavigationGestures = YES;
-    [self.view addSubview:self.web];
+    self.tabBar = [[UIScrollView alloc] init];
+    self.tabBar.showsHorizontalScrollIndicator = NO;
+    [self.view addSubview:self.tabBar];
 
     self.status = [[UILabel alloc] init];
     self.status.textAlignment = NSTextAlignmentCenter;
     self.status.font = [UIFont systemFontOfSize:12];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
     self.status.numberOfLines = 2;
-    self.status.text = @"افتح أي موقع موسيقى وتضغط زر Download، وراح ألقطها وأشغّلها. (يوتيوب وسبوتيفاي ما يشتغلون)";
+    self.status.text = @"افتح أي موقع موسيقى وتضغط زر Download، وراح ألقطها وأشغّلها. تقدر تفتح عدة نوافذ من «＋».";
     [self.view addSubview:self.status];
 
+    [self openTabWithConfig:nil];
     [self loadText:@"https://pixabay.com/music/"];
 }
 
@@ -401,12 +411,87 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     CGFloat qx = 104, qw = (b.size.width - 104 - 104 - 12) / 3.0;
     for (NSInteger i = 0; i < 3; i++) self.quick[i].frame = CGRectMake(qx + i * (qw + 6), top, qw, 34);
     self.addr.frame = CGRectMake(12, 50, b.size.width - 24, 36);
+    self.tabBar.frame = CGRectMake(0, 92, b.size.width, 34);
     CGFloat sh = 44;
-    self.web.frame = CGRectMake(0, 92, b.size.width, b.size.height - 92 - sh);
+    CGRect wf = CGRectMake(0, 130, b.size.width, b.size.height - 130 - sh);
+    for (WKWebView *w in self.tabs) w.frame = wf;
     self.status.frame = CGRectMake(12, b.size.height - sh, b.size.width - 24, sh);
 }
 
-- (void)closeTapped { [self.web stopLoading]; [self dismissViewControllerAnimated:YES completion:nil]; }
+// ----- النوافذ (تبويبات) -----
+- (WKWebView *)openTabWithConfig:(WKWebViewConfiguration *)cfg {
+    if (!cfg) cfg = [[WKWebViewConfiguration alloc] init];
+    WKWebView *w = [[WKWebView alloc] initWithFrame:CGRectZero configuration:cfg];
+    w.navigationDelegate = self;
+    w.UIDelegate = self;
+    w.allowsBackForwardNavigationGestures = YES;
+    [self.view addSubview:w];
+    [self.tabs addObject:w];
+    [self viewDidLayoutSubviews];
+    [self selectTab:(NSInteger)self.tabs.count - 1];
+    return w;
+}
+
+- (void)selectTab:(NSInteger)i {
+    if (i < 0 || i >= (NSInteger)self.tabs.count) return;
+    self.cur = i;
+    for (NSInteger k = 0; k < (NSInteger)self.tabs.count; k++) self.tabs[k].hidden = (k != i);
+    NSURL *u = self.web.URL;
+    self.addr.text = u ? u.absoluteString : @"";
+    [self refreshTabBar];
+}
+
+- (void)refreshTabBar {
+    for (UIView *v in self.tabBar.subviews) [v removeFromSuperview];
+    CGFloat x = 8;
+    for (NSInteger i = 0; i < (NSInteger)self.tabs.count; i++) {
+        NSString *t = self.tabs[i].title;
+        if (t.length == 0) t = @"جديد";
+        if (t.length > 14) t = [[t substringToIndex:14] stringByAppendingString:@"…"];
+        UIButton *b = [self pill:t action:@selector(tabTapped:) tag:i];
+        b.frame = CGRectMake(x, 0, 104, 32);
+        if (i == self.cur) b.backgroundColor = [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95];
+        [self.tabBar addSubview:b];
+        x += 110;
+    }
+    UIButton *add = [self pill:@"＋ نافذة" action:@selector(addTabTapped) tag:0];
+    add.frame = CGRectMake(x, 0, 78, 32);
+    [self.tabBar addSubview:add];
+    x += 84;
+    UIButton *del = [self pill:@"🗑 شيلها" action:@selector(closeTabTapped) tag:0];
+    del.frame = CGRectMake(x, 0, 78, 32);
+    [self.tabBar addSubview:del];
+    x += 84;
+    self.tabBar.contentSize = CGSizeMake(x + 8, 34);
+}
+
+- (void)tabTapped:(UIButton *)b { [self selectTab:b.tag]; }
+
+- (void)addTabTapped {
+    [self openTabWithConfig:nil];
+    [self loadText:@"https://pixabay.com/music/"];
+}
+
+- (void)closeTabTapped {
+    if (self.tabs.count <= 1) { self.status.text = @"هذي آخر نافذة. اضغط ✕ إغلاق لو تبغى تطلع"; return; }
+    WKWebView *w = self.web;
+    [w stopLoading];
+    [w removeFromSuperview];
+    [self.tabs removeObjectAtIndex:self.cur];
+    NSInteger n = self.cur >= (NSInteger)self.tabs.count ? (NSInteger)self.tabs.count - 1 : self.cur;
+    [self selectTab:n];
+}
+
+// روابط تفتح "نافذة جديدة" (target=_blank) تنفتح كتبويب
+- (WKWebView *)webView:(WKWebView *)wv createWebViewWithConfiguration:(WKWebViewConfiguration *)cfg
+   forNavigationAction:(WKNavigationAction *)a windowFeatures:(WKWindowFeatures *)f {
+    return [self openTabWithConfig:cfg];
+}
+
+- (void)closeTapped {
+    for (WKWebView *w in self.tabs) [w stopLoading];
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
 - (void)backTapped { if (self.web.canGoBack) [self.web goBack]; }
 
 - (void)quickTapped:(UIButton *)b {
@@ -505,7 +590,8 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 }
 
 - (void)webView:(WKWebView *)wv didFinishNavigation:(WKNavigation *)n {
-    if (wv.URL) self.addr.text = wv.URL.absoluteString;
+    if (wv == self.web && wv.URL) self.addr.text = wv.URL.absoluteString;
+    [self refreshTabBar];
 }
 
 @end
