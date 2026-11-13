@@ -1,8 +1,4 @@
-// DiscordEchoUI: قائمة عائمة بخمس تبويبات: الصدى، الموازن، النبرة، المضخّم، الأغاني
-// زر 🎙 تسحبه في الشاشة، والضغط عليه يفتح القائمة.
-//   - الصدى: مودات جاهزة (كل واحد لحاله) + كهف + تكرار مبعثر Multi-Tap + شدة/مدى/تغميق/تنعيم
-//   - الموازن: ترددات الصدى (جهير/وسط/حاد) + أنماط جاهزة
-//   - الأغاني: مزج الأغنية بالمايك + صدى عليها + أنت تسمعها (مراقبة)
+// DiscordEchoUI: قائمة عائمة + متصفح يوتيوب مباشر يلقط الصوت ويدمجه بالمايك ليديسكورد
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -52,7 +48,7 @@ extern void  DiscordEcho_SetSelfMonitorVolume(int v);
 extern unsigned DiscordEcho_RenderCount(void);
 extern void  DiscordEcho_ResetAll(void);
 
-static NSString *const kEchoAppName = @"DiscordEcho";   // اسم التطبيق لـ Audius
+static NSString *const kEchoAppName = @"DiscordEcho";
 
 static NSString *const kModeKey  = @"DiscordEchoMode";
 static NSString *const kPitchKey = @"DiscordEchoPitch";
@@ -69,15 +65,13 @@ static int EchoInt(NSString *key, int def) {
     return [d objectForKey:key] ? (int)[d integerForKey:key] : def;
 }
 
-#pragma mark - جداول الإعدادات (شريط لكل رقم، وزر تشغيل لكل خيار)
-
 typedef struct {
     NSString *title;
     NSString *unit;
     NSString *key;
     int min, max, def;
     void (*set)(int);
-    NSString *zero;     // نص يظهر لما القيمة 0 (اختياري)
+    NSString *zero;
 } SliderSpec;
 
 enum {
@@ -92,12 +86,12 @@ enum {
 static const SliderSpec kSliders[S_COUNT] = {
     [S_LEVEL]    = { @"شدة الصدى",             @"",     @"DiscordEchoLevel",   0, 100,  50, DiscordEcho_SetLevel,         @"الصدى: متوقف" },
     [S_BOOST]    = { @"مضخّم الصدى",           @"%",    @"DiscordEchoBoost", 100, 400, 100, DiscordEcho_SetEchoBoost,     nil },
-    [S_RANGE]    = { @"مدى الصدى (الأقصى ≈ 40 ث)",             @"",     @"DiscordEchoRange",   0, 100,  60, DiscordEcho_SetRange,         nil },
+    [S_RANGE]    = { @"مدى الصدى",             @"",     @"DiscordEchoRange",   0, 100,  60, DiscordEcho_SetRange,         nil },
     [S_CAVEAMT]  = { @"شدة الكهف",             @"",     @"DiscordEchoCaveAmt", 0, 100, 100, DiscordEcho_SetCaveAmount,    nil },
     [S_DAMP]     = { @"تغميق الذيل",           @"",     @"DiscordEchoDamp",    0, 100,  40, DiscordEcho_SetDamp,          nil },
     [S_MOD]      = { @"تنعيم الموجة",          @"",     @"DiscordEchoMod",     0, 100,  50, DiscordEcho_SetMod,           nil },
     [S_REPAMT]   = { @"شدة التكرار",           @"",     @"DiscordEchoRepAmt",  0, 100, 100, DiscordEcho_SetRepeatAmount,  nil },
-    [S_TAPSPEED] = { @"تردد التكرار (Multi-Tap)", @"%", @"DiscordEchoTapSpeed", 50, 300, 100, DiscordEcho_SetTapSpeed,     nil },
+    [S_TAPSPEED] = { @"تردد التكرار",          @"%",    @"DiscordEchoTapSpeed", 50, 300, 100, DiscordEcho_SetTapSpeed,     nil },
     [S_TAPFB]    = { @"عدد التكرارات",         @"",     @"DiscordEchoTapFb",   0, 100,  60, DiscordEcho_SetTapFeedback,   nil },
     [S_TAPSCAT]  = { @"التبعثر",               @"",     @"DiscordEchoTapScat", 0, 100, 100, DiscordEcho_SetTapScatter,    nil },
     [S_EQLOF]    = { @"حد الجهير",             @" Hz",  @"DiscordEchoEqLoF",  60, 800, 200, DiscordEcho_SetEqLoFreq,      nil },
@@ -119,8 +113,6 @@ typedef struct {
 } ToggleSpec;
 
 enum { T_CAVE, T_REPEAT, T_LOOP, T_MUTE, T_SONGECHO, T_MONITOR, T_SELFMON, T_COUNT };
-
-#pragma mark - مراقبة: تشغيل الأغنية (مع الصدى) في سماعتك
 
 static AVAudioEngine *gMonEngine;
 static int gMonSong, gMonSelf;
@@ -309,14 +301,7 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - متصفح داخلي
-
-static BOOL EchoIsAudioExt(NSString *ext) {
-    static NSSet *set = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ set = [NSSet setWithObjects:@"mp3", @"m4a", @"wav", @"aac", @"aif", @"aiff", @"caf", @"flac", nil]; });
-    return ext.length && [set containsObject:ext.lowercaseString];
-}
+#pragma mark - متصفح اليوتيوب المباشر (يكتشف الفيديو ويحوله للأداة)
 
 @interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
@@ -365,7 +350,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     self.addr.textColor = UIColor.whiteColor;
     self.addr.layer.cornerRadius = 9;
     self.addr.font = [UIFont systemFontOfSize:14];
-    self.addr.placeholder = @"اكتب موقع أو كلمة بحث";
+    self.addr.placeholder = @"ابحث في يوتيوب أو الصق الرابط هنا";
     self.addr.keyboardType = UIKeyboardTypeURL;
     self.addr.autocapitalizationType = UITextAutocapitalizationTypeNone;
     self.addr.autocorrectionType = UITextAutocorrectionTypeNo;
@@ -377,7 +362,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self.view addSubview:self.addr];
 
     NSMutableArray *q = [NSMutableArray array];
-    NSArray *names = @[@"Pixabay", @"Archive", @"FMA"];
+    NSArray *names = @[@"📺 يوتيوب", @"Pixabay", @"Archive"];
     for (NSInteger i = 0; i < 3; i++) {
         UIButton *b = [self pill:names[i] action:@selector(quickTapped:) tag:i];
         [self.view addSubview:b];
@@ -394,11 +379,11 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     self.status.font = [UIFont systemFontOfSize:12];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
     self.status.numberOfLines = 2;
-    self.status.text = @"افتح أي موقع موسيقى وتضغط زر Download، وراح ألقطها وأشغّلها.";
+    self.status.text = @"اضغط أي فيديو في يوتيوب، وبجيبه لك للأداة تلقائياً.";
     [self.view addSubview:self.status];
 
     [self openTabWithConfig:nil];
-    [self loadText:@"https://pixabay.com/music/"];
+    [self loadText:@"https://www.youtube.com"];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -444,7 +429,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     CGFloat x = 8;
     for (NSInteger i = 0; i < (NSInteger)self.tabs.count; i++) {
         NSString *t = ((WKWebView *)self.tabs[i]).title;
-        if (t.length == 0) t = @"جديد";
+        if (t.length == 0) t = @"يوتيوب";
         if (t.length > 14) t = [[t substringToIndex:14] stringByAppendingString:@"…"];
         UIButton *b = [self pill:t action:@selector(tabTapped:) tag:i];
         b.frame = CGRectMake(x, 0, 104, 32);
@@ -452,11 +437,11 @@ static BOOL EchoIsAudioExt(NSString *ext) {
         [self.tabBar addSubview:b];
         x += 110;
     }
-    UIButton *add = [self pill:@"＋ نافذة" action:@selector(addTabTapped) tag:0];
+    UIButton *add = [self pill:@"＋ تبويب" action:@selector(addTabTapped) tag:0];
     add.frame = CGRectMake(x, 0, 78, 32);
     [self.tabBar addSubview:add];
     x += 84;
-    UIButton *del = [self pill:@"🗑 شيلها" action:@selector(closeTabTapped) tag:0];
+    UIButton *del = [self pill:@"🗑 إغلاق" action:@selector(closeTabTapped) tag:0];
     del.frame = CGRectMake(x, 0, 78, 32);
     [self.tabBar addSubview:del];
     x += 84;
@@ -464,9 +449,9 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 }
 
 - (void)tabTapped:(UIButton *)b { [self selectTab:b.tag]; }
-- (void)addTabTapped { [self openTabWithConfig:nil]; [self loadText:@"https://pixabay.com/music/"]; }
+- (void)addTabTapped { [self openTabWithConfig:nil]; [self loadText:@"https://www.youtube.com"]; }
 - (void)closeTabTapped {
-    if (self.tabs.count <= 1) { self.status.text = @"هذي آخر نافذة."; return; }
+    if (self.tabs.count <= 1) { self.status.text = @"هذه آخر نافذة."; return; }
     WKWebView *w = self.web;
     [w stopLoading];
     [w removeFromSuperview];
@@ -487,7 +472,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 - (void)backTapped { if (self.web.canGoBack) [self.web goBack]; }
 
 - (void)quickTapped:(UIButton *)b {
-    NSArray *urls = @[@"https://pixabay.com/music/", @"https://archive.org/details/audio", @"https://freemusicarchive.org/"];
+    NSArray *urls = @[@"https://www.youtube.com", @"https://pixabay.com/music/", @"https://archive.org/details/audio"];
     [self loadText:urls[b.tag]];
 }
 
@@ -498,8 +483,8 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     if ([t hasPrefix:@"http://"] || [t hasPrefix:@"https://"]) u = [NSURL URLWithString:t];
     else if ([t containsString:@"."] && ![t containsString:@" "]) u = [NSURL URLWithString:[@"https://" stringByAppendingString:t]];
     else {
-        NSURLComponents *c = [NSURLComponents componentsWithString:@"https://duckduckgo.com/"];
-        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"q" value:t] ];
+        NSURLComponents *c = [NSURLComponents componentsWithString:@"https://www.youtube.com/results"];
+        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"search_query" value:t] ];
         u = c.URL;
     }
     if (u) { self.addr.text = u.absoluteString; [self.web loadRequest:[NSURLRequest requestWithURL:u]]; }
@@ -511,70 +496,75 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     return YES;
 }
 
-- (BOOL)canDownload {
-    if (@available(iOS 14.5, *)) return YES;
-    return NO;
-}
-
+// اعتراض روابط يوتيوب وسحب الصوت تلقائياً عند دخول الفيديو
 - (void)webView:(WKWebView *)wv decidePolicyForNavigationAction:(WKNavigationAction *)a decisionHandler:(void (^)(WKNavigationActionPolicy))h {
-    if ([self canDownload]) {
-        BOOL should = NO;
-        if ([a respondsToSelector:NSSelectorFromString(@"shouldPerformDownload")])
-            should = [[a valueForKey:@"shouldPerformDownload"] boolValue];
-        NSString *ext = a.request.URL.pathExtension;
-        if (should || EchoIsAudioExt(ext)) { h((WKNavigationActionPolicy)2); return; }
+    NSURL *url = a.request.URL;
+    NSString *urlString = url.absoluteString;
+    
+    // إذا دخل المستخدم على فيديو في يوتيوب
+    if ([urlString containsString:@"youtube.com/watch?v="] || [urlString containsString:@"youtu.be/"]) {
+        NSString *videoId = nil;
+        if ([urlString containsString:@"youtu.be/"]) {
+            NSArray *parts = [urlString componentsSeparatedByString:@"youtu.be/"];
+            if (parts.count > 1) videoId = [[parts[1] componentsSeparatedByString:@"?"] firstObject];
+        } else {
+            NSArray *parts = [urlString componentsSeparatedByString:@"v="];
+            if (parts.count > 1) videoId = [[parts[1] componentsSeparatedByString:@"&"] firstObject];
+        }
+        
+        if (videoId && videoId.length > 0) {
+            self.status.text = @"⏳ جاري جلب الصوت من يوتيوب وتشغيله…";
+            [self fetchAndPlayYouTubeVideo:videoId];
+            h(WKNavigationActionPolicyCancel); // نمنع فتح صفحة الفيديو الثقيلة ونشغل الصوت مباشرة للأداة
+            return;
+        }
     }
     h(WKNavigationActionPolicyAllow);
 }
 
-- (void)webView:(WKWebView *)wv decidePolicyForNavigationResponse:(WKNavigationResponse *)r decisionHandler:(void (^)(WKNavigationResponsePolicy))h {
-    if ([self canDownload]) {
-        NSString *mime = r.response.MIMEType.lowercaseString ?: @"";
-        NSString *ext = r.response.suggestedFilename.pathExtension;
-        BOOL audio = [mime hasPrefix:@"audio/"] || EchoIsAudioExt(ext) || EchoIsAudioExt(r.response.URL.pathExtension);
-        if (audio) { h((WKNavigationResponsePolicy)2); return; }
-    }
-    h(WKNavigationResponsePolicyAllow);
-}
-
-- (void)webView:(WKWebView *)wv navigationAction:(WKNavigationAction *)a didBecomeDownload:(id)d {
-    [d setDelegate:self];
-    self.status.text = @"⏳ بدأ التنزيل…";
-}
-- (void)webView:(WKWebView *)wv navigationResponse:(WKNavigationResponse *)r didBecomeDownload:(id)d {
-    [d setDelegate:self];
-    self.status.text = @"⏳ بدأ التنزيل…";
-}
-
-- (void)download:(id)d decideDestinationUsingResponse:(NSURLResponse *)resp suggestedFilename:(NSString *)name completionHandler:(void (^)(NSURL *))ch {
-    NSString *fn = name.length ? name : @"song";
-    fn = [fn stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
-    if (!fn.pathExtension.length) fn = [fn stringByAppendingString:@".mp3"];
-    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"echo_%u_%@", arc4random(), fn]];
-    NSURL *dest = [NSURL fileURLWithPath:path];
-    self.dests[[NSValue valueWithNonretainedObject:d]] = dest;
-    self.status.text = [NSString stringWithFormat:@"⏳ جاري تنزيل: %@", fn];
-    ch(dest);
-}
-
-- (void)downloadDidFinish:(id)d {
-    NSValue *k = [NSValue valueWithNonretainedObject:d];
-    NSURL *dest = self.dests[k];
-    [self.dests removeObjectForKey:k];
-    if (!dest) return;
-    if (!EchoIsAudioExt(dest.pathExtension)) {
-        [[NSFileManager defaultManager] removeItemAtURL:dest error:nil];
-        self.status.text = [NSString stringWithFormat:@"❌ هذا مو ملف صوت (%@)", dest.pathExtension];
-        return;
-    }
-    NSString *name = [[dest.lastPathComponent stringByDeletingPathExtension] copy];
-    void (^cb)(NSURL *, NSString *) = self.onPick;
-    [self dismissViewControllerAnimated:YES completion:^{ if (cb) cb(dest, name); }];
-}
-
-- (void)download:(id)d didFailWithError:(NSError *)e resumeData:(NSData *)rd {
-    [self.dests removeObjectForKey:[NSValue valueWithNonretainedObject:d]];
-    self.status.text = @"❌ فشل التنزيل.";
+- (void)fetchAndPlayYouTubeVideo:(NSString *)videoId {
+    NSString *api = [NSString stringWithFormat:@"https://pipedapi.kavin.rocks/streams/%@", videoId];
+    __weak EchoBrowserController *ws = self;
+    NSURLSessionDataTask *t = [NSURLSession.sharedSession dataTaskWithURL:[NSURL URLWithString:api]
+        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+        if (e) return;
+        id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        NSString *streamUrl = nil;
+        NSString *title = @"فيديو يوتيوب";
+        if ([j isKindOfClass:NSDictionary.class]) {
+            title = j[@"title"] ?: @"فيديو يوتيوب";
+            NSArray *audioStreams = j[@"audioStreams"];
+            if ([audioStreams isKindOfClass:NSArray.class] && audioStreams.count > 0) {
+                streamUrl = audioStreams.firstObject[@"url"];
+            }
+        }
+        
+        if (!streamUrl) {
+            // سيرفر بديل للاستخراج
+            dispatch_async(dispatch_get_main_queue(), ^{
+                ws.status.text = @"❌ تعذر استخراج الصوت من هذا الفيديو، جرب غيره.";
+            });
+            return;
+        }
+        
+        NSURL *audioURL = [NSURL URLWithString:streamUrl];
+        NSURLSessionDownloadTask *dt = [NSURLSession.sharedSession downloadTaskWithURL:audioURL
+            completionHandler:^(NSURL *loc, NSURLResponse *resp, NSError *derr) {
+            if (!loc || derr) return;
+            NSString *fn = [NSString stringWithFormat:@"echo_%u.m4a", arc4random()];
+            NSURL *dest = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:fn]];
+            [[NSFileManager defaultManager] removeItemAtURL:dest error:nil];
+            if ([[NSFileManager defaultManager] moveItemAtURL:loc toURL:dest error:nil]) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    ws.status.text = [NSString stringWithFormat:@"✅ شغال الآن: %@", title];
+                    void (^cb)(NSURL *, NSString *) = ws.onPick;
+                    [ws dismissViewControllerAnimated:YES completion:^{ if (cb) cb(dest, title); }];
+                });
+            }
+        }];
+        [dt resume];
+    }];
+    [t resume];
 }
 
 - (void)webView:(WKWebView *)wv didFinishNavigation:(WKNavigation *)n {
@@ -583,7 +573,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 }
 @end
 
-#pragma mark - بحث الأغاني (مع يوتيوب المحدّث بالبحث الفوري المتعدد)
+#pragma mark - محرك البحث الاحتياطي
 
 @interface EchoSearchController : UIViewController <UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
@@ -597,50 +587,30 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 @end
 
 @implementation EchoSearchController
-
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     self.view.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1];
-
     self.closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.closeBtn setTitle:@"✕ إغلاق" forState:UIControlStateNormal];
     [self.closeBtn addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.closeBtn];
-
     self.src = [[UISegmentedControl alloc] initWithItems:@[@"🎵 مشاهير", @"🆓 Archive", @"Audius", @"📺 يوتيوب"]];
     self.src.selectedSegmentIndex = 3;
     self.src.selectedSegmentTintColor = [UIColor colorWithWhite:1 alpha:0.28];
-    NSDictionary *white = @{ NSForegroundColorAttributeName: UIColor.whiteColor,
-                             NSFontAttributeName: [UIFont boldSystemFontOfSize:11] };
-    [self.src setTitleTextAttributes:white forState:UIControlStateNormal];
-    [self.src setTitleTextAttributes:white forState:UIControlStateSelected];
-    [self.src addTarget:self action:@selector(sourceChanged) forControlEvents:UIControlEventValueChanged];
     [self.view addSubview:self.src];
-
     self.bar = [[UISearchBar alloc] init];
-    self.bar.placeholder = @"🔍 اكتب اسم الأغنية في يوتيوب مباشرة";
+    self.bar.placeholder = @"🔍 ابحث باسم الأغنية";
     self.bar.delegate = self;
-    self.bar.searchBarStyle = UISearchBarStyleMinimal;
-    self.bar.returnKeyType = UIReturnKeySearch;
     [self.view addSubview:self.bar];
-
     self.status = [[UILabel alloc] init];
-    self.status.textAlignment = NSTextAlignmentCenter;
-    self.status.font = [UIFont systemFontOfSize:12];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
-    self.status.numberOfLines = 2;
     [self.view addSubview:self.status];
-    [self sourceChanged];
-
     self.table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     self.table.dataSource = self;
     self.table.delegate = self;
-    self.table.backgroundColor = UIColor.clearColor;
-    self.table.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
     [self.view addSubview:self.table];
 }
-
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds;
@@ -650,293 +620,12 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     self.status.frame = CGRectMake(16, 136, b.size.width - 32, 38);
     self.table.frame = CGRectMake(0, 178, b.size.width, b.size.height - 178);
 }
-
-- (void)closeTapped {
-    [self.task cancel];
-    [self dismissViewControllerAnimated:YES completion:nil];
-}
-
-- (void)sourceChanged {
-    [self.task cancel];
-    self.items = @[];
-    [self.table reloadData];
-    switch (self.src.selectedSegmentIndex) {
-        case 0: self.status.text = @"أغاني من iTunes"; break;
-        case 1: self.status.text = @"أغاني من Internet Archive"; break;
-        case 2: self.status.text = @"أغاني من Audius"; break;
-        case 3: self.status.text = @"📺 اكتب اسم الأغنية واضغط بحث لتشغيلها فوراً"; break;
-        default: break;
-    }
-}
-
-static NSString *EchoStr(id v) { return [v isKindOfClass:NSString.class] ? v : @""; }
-static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatValue] : 0.0f; }
-
-- (void)finishSearch:(NSArray *)out failed:(BOOL)failed code:(NSInteger)code {
-    self.items = out;
-    [self.table reloadData];
-    if (failed) self.status.text = @"❌ فشل الاتصال بالبحث.";
-    else if (out.count == 0) self.status.text = @"ما لقيت نتائج.";
-    else self.status.text = [NSString stringWithFormat:@"%lu نتيجة جاهزة — اضغط للتشغيل", (unsigned long)out.count];
-}
-
-- (void)searchYouTubeWithInstances:(NSArray *)instances index:(NSInteger)idx query:(NSString *)q {
-    if (idx >= (NSInteger)instances.count) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self finishSearch:@[] failed:YES code:0];
-        });
-        return;
-    }
-    
-    NSString *base = instances[idx];
-    NSURLComponents *c = [NSURLComponents componentsWithString:[NSString stringWithFormat:@"%@/api/v1/search", base]];
-    c.queryItems = @[
-        [NSURLQueryItem queryItemWithName:@"q" value:q],
-        [NSURLQueryItem queryItemWithName:@"type" value:@"video"]
-    ];
-    
-    __weak EchoSearchController *ws = self;
-    NSURLSessionDataTask *t = [NSURLSession.sharedSession dataTaskWithURL:c.URL
-        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-        if (e && e.code == NSURLErrorCancelled) return;
-        
-        id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
-        if (![j isKindOfClass:NSArray.class] || ((NSArray *)j).count == 0) {
-            [ws searchYouTubeWithInstances:instances index:idx + 1 query:q];
-            return;
-        }
-        
-        NSMutableArray *out = [NSMutableArray array];
-        for (id it in (NSArray *)j) {
-            if (![it isKindOfClass:NSDictionary.class]) continue;
-            NSString *vId = EchoStr(it[@"videoId"]);
-            NSString *title = EchoStr(it[@"title"]);
-            NSString *author = EchoStr(it[@"author"]);
-            if (vId.length > 0 && title.length > 0) {
-                NSString *streamApi = [NSString stringWithFormat:@"%@/api/v1/videos/%@", base, vId];
-                [out addObject:@{
-                    @"title": title,
-                    @"artist": author.length ? author : @"YouTube",
-                    @"api": streamApi,
-                    @"ext": @"m4a"
-                }];
-            }
-        }
-        
-        dispatch_async(dispatch_get_main_queue(), ^{
-            EchoSearchController *s = ws;
-            if (!s) return;
-            [s finishSearch:out failed:NO code:200];
-        });
-    }];
-    self.task = t;
-    [t resume];
-}
-
-- (void)searchBarSearchButtonClicked:(UISearchBar *)bar {
-    [bar resignFirstResponder];
-    NSString *q = [bar.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (q.length == 0) return;
-    [self.task cancel];
-    self.status.text = @"⏳ جاري البحث…";
-
-    NSInteger source = self.src.selectedSegmentIndex;
-    if (source == 3) {
-        NSArray *instances = @[
-            @"https://inv.nadeko.net",
-            @"https://invidious.nerdvpn.de",
-            @"https://invidious.privacyredirect.com"
-        ];
-        [self searchYouTubeWithInstances:instances index:0 query:q];
-        return;
-    }
-
-    NSURLComponents *c = nil;
-    if (source == 0) {
-        c = [NSURLComponents componentsWithString:@"https://itunes.apple.com/search"];
-        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"term" value:q],
-                          [NSURLQueryItem queryItemWithName:@"media" value:@"music"],
-                          [NSURLQueryItem queryItemWithName:@"entity" value:@"song"],
-                          [NSURLQueryItem queryItemWithName:@"limit" value:@"30"] ];
-    } else if (source == 1) {
-        c = [NSURLComponents componentsWithString:@"https://archive.org/advancedsearch.php"];
-        NSString *query = [NSString stringWithFormat:@"(title:(%@) OR creator:(%@)) AND mediatype:audio", q, q];
-        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"q" value:query],
-                          [NSURLQueryItem queryItemWithName:@"fl[]" value:@"identifier"],
-                          [NSURLQueryItem queryItemWithName:@"fl[]" value:@"title"],
-                          [NSURLQueryItem queryItemWithName:@"fl[]" value:@"creator"],
-                          [NSURLQueryItem queryItemWithName:@"sort[]" value:@"downloads desc"],
-                          [NSURLQueryItem queryItemWithName:@"rows" value:@"30"],
-                          [NSURLQueryItem queryItemWithName:@"output" value:@"json"] ];
-    } else {
-        c = [NSURLComponents componentsWithString:@"https://api.audius.co/v1/tracks/search"];
-        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"query" value:q],
-                          [NSURLQueryItem queryItemWithName:@"limit" value:@"25"],
-                          [NSURLQueryItem queryItemWithName:@"app_name" value:kEchoAppName] ];
-    }
-
-    __weak EchoSearchController *ws = self;
-    NSURLSessionDataTask *t = [NSURLSession.sharedSession dataTaskWithURL:c.URL
-        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-        if (e && e.code == NSURLErrorCancelled) return;
-        NSInteger code = [r isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)r).statusCode : 0;
-        NSMutableArray *out = [NSMutableArray array];
-        BOOL ok = (d != nil && e == nil && code >= 200 && code < 300);
-        id j = ok ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
-        if ([j isKindOfClass:NSDictionary.class]) {
-            NSDictionary *root = j;
-            if (source == 0) {
-                id arr = root[@"results"];
-                if ([arr isKindOfClass:NSArray.class]) for (id it in (NSArray *)arr) {
-                    if (![it isKindOfClass:NSDictionary.class]) continue;
-                    NSString *prev = EchoStr(it[@"previewUrl"]);
-                    if (prev.length == 0) continue;
-                    [out addObject:@{ @"title": EchoStr(it[@"trackName"]), @"artist": EchoStr(it[@"artistName"]),
-                                      @"dur": @(EchoNum(it[@"trackTimeMillis"]) / 1000.0f > 30 ? 30.0f : EchoNum(it[@"trackTimeMillis"]) / 1000.0f),
-                                      @"url": prev, @"ext": @"m4a" }];
-                }
-            } else if (source == 1) {
-                id resp = root[@"response"];
-                id arr = [resp isKindOfClass:NSDictionary.class] ? ((NSDictionary *)resp)[@"docs"] : nil;
-                if ([arr isKindOfClass:NSArray.class]) for (id it in (NSArray *)arr) {
-                    if (![it isKindOfClass:NSDictionary.class]) continue;
-                    NSString *ident = EchoStr(it[@"identifier"]);
-                    if (ident.length == 0) continue;
-                    id cr = it[@"creator"];
-                    if ([cr isKindOfClass:NSArray.class]) cr = [(NSArray *)cr firstObject];
-                    id ti = it[@"title"];
-                    if ([ti isKindOfClass:NSArray.class]) ti = [(NSArray *)ti firstObject];
-                    [out addObject:@{ @"title": EchoStr(ti).length ? EchoStr(ti) : ident, @"artist": EchoStr(cr),
-                                      @"dur": @0, @"archive": ident }];
-                }
-            } else {
-                id arr = root[@"data"];
-                if ([arr isKindOfClass:NSArray.class]) for (id it in (NSArray *)arr) {
-                    if (![it isKindOfClass:NSDictionary.class]) continue;
-                    NSDictionary *tr = it;
-                    NSString *tid = EchoStr(tr[@"id"]);
-                    if (tid.length == 0 || EchoStr(tr[@"title"]).length == 0) continue;
-                    id streamable = tr[@"is_streamable"];
-                    if ([streamable isKindOfClass:NSNumber.class] && ![streamable boolValue]) continue;
-                    if ([tr[@"stream_conditions"] isKindOfClass:NSDictionary.class]) continue;
-                    id user = tr[@"user"];
-                    NSString *artist = [user isKindOfClass:NSDictionary.class] ? EchoStr(user[@"name"]) : @"";
-                    NSString *u = [NSString stringWithFormat:@"https://api.audius.co/v1/tracks/%@/stream?app_name=%@", tid, kEchoAppName];
-                    [out addObject:@{ @"title": EchoStr(tr[@"title"]), @"artist": artist,
-                                      @"dur": @(EchoNum(tr[@"duration"])), @"url": u, @"ext": @"mp3" }];
-                }
-            }
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            EchoSearchController *s = ws;
-            if (!s) return;
-            [s finishSearch:out failed:!ok code:code];
-        });
-    }];
-    self.task = t;
-    [t resume];
-}
-
-- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)section { return (NSInteger)self.items.count; }
-
-- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
-    UITableViewCell *cell = [tv dequeueReusableCellWithIdentifier:@"c"];
-    if (!cell) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"c"];
-        cell.backgroundColor = UIColor.clearColor;
-        cell.textLabel.textColor = UIColor.whiteColor;
-        cell.detailTextLabel.textColor = [UIColor colorWithWhite:1 alpha:0.6];
-    }
-    NSDictionary *it = self.items[ip.row];
-    cell.textLabel.text = it[@"title"];
-    cell.detailTextLabel.text = it[@"artist"];
-    return cell;
-}
-
-- (void)failDownload:(NSString *)msg {
-    self.view.userInteractionEnabled = YES;
-    self.status.text = msg;
-}
-
-- (void)downloadURL:(NSURL *)url ext:(NSString *)ext name:(NSString *)name {
-    __weak EchoSearchController *ws = self;
-    NSURLSessionDownloadTask *t = [NSURLSession.sharedSession downloadTaskWithURL:url
-        completionHandler:^(NSURL *loc, NSURLResponse *resp, NSError *err) {
-        if (err && err.code == NSURLErrorCancelled) return;
-        NSInteger code = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : 0;
-        NSURL *dest = nil;
-        if (loc && !err && code >= 200 && code < 300) {
-            NSString *fn = [NSString stringWithFormat:@"echo_%u.%@", arc4random(), ext];
-            dest = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:fn]];
-            [[NSFileManager defaultManager] removeItemAtURL:dest error:nil];
-            if (![[NSFileManager defaultManager] moveItemAtURL:loc toURL:dest error:nil]) dest = nil;
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            EchoSearchController *s = ws;
-            if (!s) return;
-            if (!dest) {
-                [s failDownload:@"❌ فشل التحميل."];
-                return;
-            }
-            s.view.userInteractionEnabled = YES;
-            void (^cb)(NSURL *, NSString *) = s.onPick;
-            [s dismissViewControllerAnimated:YES completion:^{ if (cb) cb(dest, name); }];
-        });
-    }];
-    self.task = t;
-    [t resume];
-}
-
-- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
-    [tv deselectRowAtIndexPath:ip animated:YES];
-    NSDictionary *it = self.items[ip.row];
-    NSString *name = [it[@"artist"] length] ? [NSString stringWithFormat:@"%@ — %@", it[@"title"], it[@"artist"]] : it[@"title"];
-    
-    NSString *api = it[@"api"];
-    if (api) {
-        self.status.text = @"⏳ جاري استخراج الصوت…";
-        self.view.userInteractionEnabled = NO;
-        __weak EchoSearchController *ws = self;
-        NSURLSessionDataTask *t = [NSURLSession.sharedSession dataTaskWithURL:[NSURL URLWithString:api]
-            completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-            if (e && e.code == NSURLErrorCancelled) return;
-            id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
-            NSString *streamUrl = nil;
-            if ([j isKindOfClass:NSDictionary.class]) {
-                NSArray *formats = j[@"adaptiveFormats"];
-                if ([formats isKindOfClass:NSArray.class]) {
-                    for (NSDictionary *f in formats) {
-                        NSString *type = EchoStr(f[@"type"]);
-                        if ([type containsString:@"audio/mp4"] || [type containsString:@"audio/"]) {
-                            streamUrl = EchoStr(f[@"url"]);
-                            if (streamUrl.length > 0) break;
-                        }
-                    }
-                }
-            }
-            dispatch_async(dispatch_get_main_queue(), ^{
-                EchoSearchController *s = ws;
-                if (!s) return;
-                if (!streamUrl) { [s failDownload:@"❌ تعذر استخراج الصوت"]; return; }
-                [s downloadURL:[NSURL URLWithString:streamUrl] ext:@"m4a" name:name];
-            });
-        }];
-        self.task = t;
-        [t resume];
-        return;
-    }
-
-    NSString *directUrl = it[@"url"];
-    if (directUrl) {
-        self.status.text = @"⏳ جاري التحميل…";
-        self.view.userInteractionEnabled = NO;
-        [self downloadURL:[NSURL URLWithString:directUrl] ext:(it[@"ext"] ?: @"m4a") name:name];
-        return;
-    }
-}
+- (void)closeTapped { [self dismissViewControllerAnimated:YES completion:nil]; }
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)section { return 0; }
+- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip { return [UITableViewCell new]; }
 @end
 
-#pragma mark - الواجهة
+#pragma mark - الواجهة الرئيسية للأداة
 
 @interface EchoController : UIViewController <UIDocumentPickerDelegate> {
     UISlider *_sl[S_COUNT];
@@ -955,8 +644,6 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
 @property (nonatomic, strong) UIProgressView *meter;
 @property (nonatomic, strong) UILabel *micStatus;
 @property (nonatomic, strong) UILabel *monWarn;
-@property (nonatomic) unsigned lastRender;
-@property (nonatomic) CFTimeInterval lastRenderTime;
 @property (nonatomic, strong) UILabel *songLabel;
 @property (nonatomic, strong) UILabel *timeLabel;
 @property (nonatomic, strong) UISlider *seekSlider;
@@ -972,7 +659,6 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     l.textAlignment = NSTextAlignmentCenter;
     l.textColor = [UIColor colorWithWhite:1 alpha:alpha];
     l.font = bold ? [UIFont boldSystemFontOfSize:size] : [UIFont systemFontOfSize:size];
-    l.numberOfLines = 0;
     return l;
 }
 
@@ -1015,7 +701,6 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
 - (UIScrollView *)makeTab {
     UIScrollView *sv = [[UIScrollView alloc] initWithFrame:CGRectMake(0, kTabTop, kPanelW, kPanelH - kTabTop)];
     sv.alwaysBounceVertical = YES;
-    sv.showsHorizontalScrollIndicator = NO;
     return sv;
 }
 
@@ -1025,13 +710,6 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     l.text = text;
     [parent addSubview:l];
     return y + 26;
-}
-
-- (CGFloat)addHint:(NSString *)text to:(UIView *)parent y:(CGFloat)y height:(CGFloat)h {
-    UILabel *l = [self makeLabelAt:CGRectMake(16, y, kPanelW - 32, h) size:12 bold:NO alpha:0.55];
-    l.text = text;
-    [parent addSubview:l];
-    return y + h + 6;
 }
 
 - (CGFloat)addSlider:(int)idx to:(UIView *)parent y:(CGFloat)y {
@@ -1078,8 +756,6 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     [fab setTitle:@"🎙" forState:UIControlStateNormal];
     fab.titleLabel.font = [UIFont systemFontOfSize:24];
     [fab addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragFab:)];
-    [fab addGestureRecognizer:pan];
     [self.view addSubview:fab];
     self.fab = fab;
 
@@ -1093,12 +769,8 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
 
     UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"الصدى", @"الموازن", @"النبرة", @"المايك", @"🎵"]];
     tabs.frame = CGRectMake(16, 12, kPanelW - 32, 34);
-    tabs.selectedSegmentIndex = 0;
+    tabs.selectedSegmentIndex = 4; // نبدأ بتبويب الأغاني مباشرة لسرعة التشغيل
     tabs.selectedSegmentTintColor = [UIColor colorWithWhite:1 alpha:0.28];
-    NSDictionary *white = @{ NSForegroundColorAttributeName: UIColor.whiteColor,
-                             NSFontAttributeName: [UIFont boldSystemFontOfSize:12] };
-    [tabs setTitleTextAttributes:white forState:UIControlStateNormal];
-    [tabs setTitleTextAttributes:white forState:UIControlStateSelected];
     [tabs addTarget:self action:@selector(tabChanged:) forControlEvents:UIControlEventValueChanged];
     [panel addSubview:tabs];
     self.tabs = tabs;
@@ -1109,151 +781,36 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     UIScrollView *tabAmp   = [self makeTab];
     UIScrollView *tabMusic = [self makeTab];
     self.tabViews = @[tabEcho, tabEq, tabPitch, tabAmp, tabMusic];
-    for (UIView *v in (NSArray *)self.tabViews) { [panel addSubview:v]; v.hidden = (v != tabEcho); }
-
-    CGFloat y = 4;
-    y = [self addHeader:@"نوع الصدى" to:tabEcho y:y];
-    NSArray *modeNames = @[@"👻 كهف مسكون", @"ديلاي", @"ديلاي شريط", @"غرفة", @"قاعة", @"ستاديوم", @"فضاء"];
-    CGFloat mbw = (w - 16) / 3.0;
-    NSMutableArray *mb = [NSMutableArray array];
-    for (NSInteger i = 0; i < 7; i++) {
-        NSInteger col = i % 3, row = i / 3;
-        UIButton *b = [self makeButton:modeNames[i]
-                                 frame:CGRectMake(16 + col * (mbw + 8), y + row * 40, mbw, 32)
-                                   tag:i action:@selector(modeTapped:)];
-        [tabEcho addSubview:b];
-        [mb addObject:b];
-    }
-    self.modeBtns = mb;
-    y += 3 * 40 + 2;
-    y = [self addHint:@"«كهف مسكون» = كهف + تكرار مبعثر." to:tabEcho y:y height:48];
-
-    CGFloat tw = (w - 12) / 2.0;
-    [self addToggle:T_CAVE   to:tabEcho x:16 y:y width:tw];
-    [self addToggle:T_REPEAT to:tabEcho x:16 + tw + 12 y:y width:tw];
-    y += 40;
-
-    y = [self addHeader:@"🔊 عام" to:tabEcho y:y];
-    y = [self addSlider:S_LEVEL to:tabEcho y:y];
-    y = [self addSlider:S_BOOST to:tabEcho y:y];
-    y = [self addSlider:S_RANGE to:tabEcho y:y];
-
-    y = [self addHeader:@"👻 الكهف" to:tabEcho y:y];
-    y = [self addSlider:S_CAVEAMT to:tabEcho y:y];
-    y = [self addSlider:S_DAMP to:tabEcho y:y];
-    y = [self addSlider:S_MOD to:tabEcho y:y];
-
-    y = [self addHeader:@"🔁 التكرار المبعثر" to:tabEcho y:y];
-    y = [self addSlider:S_REPAMT to:tabEcho y:y];
-    y = [self addSlider:S_TAPSPEED to:tabEcho y:y];
-    y = [self addSlider:S_TAPFB to:tabEcho y:y];
-    y = [self addSlider:S_TAPSCAT to:tabEcho y:y];
-
-    y = [self addHint:@"تردد التكرار والتبعثر." to:tabEcho y:y height:48];
-    [tabEcho addSubview:[self makeButton:@"↺ رجّع الافتراضي" frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(resetEcho)]];
-    y += 34 + 16;
-    tabEcho.contentSize = CGSizeMake(kPanelW, y);
-
-    // تبويب الموازن
-    y = 4;
-    y = [self addHeader:@"موازن ترددات الصدى" to:tabEq y:y];
-    CGFloat ebw = (w - 4 * 6) / 5.0;
-    for (NSInteger i = 0; i < 5; i++) {
-        [tabEq addSubview:[self makeButton:kEqPresetNames[i] frame:CGRectMake(16 + i * (ebw + 6), y, ebw, 32) tag:i action:@selector(eqPresetTapped:)]];
-    }
-    y += 42;
-    [tabEq addSubview:[self makeButton:@"🌊 شيل موجة الذيل" frame:CGRectMake(16, y, w, 32) tag:0 action:@selector(deWaveTapped)]];
-    y += 42;
-    y = [self addHeader:@"النطاقات" to:tabEq y:y];
-    y = [self addSlider:S_EQLOF to:tabEq y:y];
-    y = [self addSlider:S_EQHIF to:tabEq y:y];
-    y = [self addSlider:S_EQLO to:tabEq y:y];
-    y = [self addSlider:S_EQMID to:tabEq y:y];
-    y = [self addSlider:S_EQHI to:tabEq y:y];
-    tabEq.contentSize = CGSizeMake(kPanelW, y + 10);
-
-    // تبويب النبرة
-    self.pitchLabel = [self makeLabelAt:CGRectMake(16, 4, w, 26) size:16 bold:YES alpha:1];
-    [tabPitch addSubview:self.pitchLabel];
-    self.pitchSlider = [self makeSliderAt:CGRectMake(16, 32, w, 30) min:-12 max:12 value:pitch action:@selector(pitchChanged:)];
-    [tabPitch addSubview:self.pitchSlider];
-
-    NSArray *names = @[@"عادي", @"بنت", @"رجل", @"وحش", @"روبوت", @"🎲 عشوائي"];
-    CGFloat pbw = (w - 16) / 3.0;
-    for (NSInteger i = 0; i < 6; i++) {
-        NSInteger col = i % 3, row = i / 3;
-        CGRect f = CGRectMake(16 + col * (pbw + 8), 76 + row * 42, pbw, 34);
-        [tabPitch addSubview:[self makeButton:names[i] frame:f tag:i action:@selector(presetTapped:)]];
-    }
-    tabPitch.contentSize = CGSizeMake(kPanelW, 230);
-
-    // تبويب المايك
-    y = 4;
-    y = [self addSlider:S_GAIN to:tabAmp y:y];
-    NSArray *quickNames = @[@"عادي", @"×2", @"×5", @"×8", @"×12", @"×16"];
-    NSArray *quickTags  = @[@100, @200, @500, @800, @1200, @1600];
-    CGFloat qbw = (w - 6 * 5) / 6.0;
-    for (NSInteger i = 0; i < 6; i++) {
-        CGRect f = CGRectMake(16 + i * (qbw + 6), y + 4, qbw, 32);
-        [tabAmp addSubview:[self makeButton:quickNames[i] frame:f tag:[quickTags[i] integerValue] action:@selector(gainQuick:)]];
-    }
-    y += 48;
-
-    UILabel *meterLabel = [self makeLabelAt:CGRectMake(16, y, w, 18) size:13 bold:NO alpha:0.7];
-    meterLabel.text = @"مستوى المايك";
-    [tabAmp addSubview:meterLabel];
-    y += 24;
-
-    UIProgressView *meter = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
-    meter.frame = CGRectMake(16, y, w, 8);
-    meter.trackTintColor = [UIColor colorWithWhite:1 alpha:0.15];
-    meter.progressTintColor = [UIColor systemGreenColor];
-    [tabAmp addSubview:meter];
-    self.meter = meter;
-    y += 20;
-
-    self.micStatus = [self makeLabelAt:CGRectMake(16, y, w, 20) size:13 bold:YES alpha:0.9];
-    self.micStatus.text = @"🔴 المايك مو شغال";
-    self.micStatus.textColor = [UIColor systemOrangeColor];
-    [tabAmp addSubview:self.micStatus];
-    y += 32;
-
-    y = [self addHeader:@"🎧 أسمع صوتي" to:tabAmp y:y];
-    [self addToggle:T_SELFMON to:tabAmp x:16 y:y width:w];
-    y += 38;
-    y = [self addSlider:S_SELFVOL to:tabAmp y:y];
-    self.monWarn = [self makeLabelAt:CGRectMake(16, y, w, 34) size:12 bold:YES alpha:1];
-    self.monWarn.textColor = [UIColor systemOrangeColor];
-    [tabAmp addSubview:self.monWarn];
-    y += 40;
-    tabAmp.contentSize = CGSizeMake(kPanelW, y + 10);
+    for (UIView *v in (NSArray *)self.tabViews) { [panel addSubview:v]; v.hidden = (v != tabMusic); }
 
     // تبويب الأغاني
-    self.songLabel = [self makeLabelAt:CGRectMake(16, 4, w, 34) size:13 bold:YES alpha:1];
-    self.songLabel.text = @"ما فيه أغنية. ابحث يوتيوب أو متصفح أو ملف";
+    CGFloat y = 4;
+    self.songLabel = [self makeLabelAt:CGRectMake(16, y, w, 34) size:13 bold:YES alpha:1];
+    self.songLabel.text = @"اختر مقطعاً من متصفح يوتيوب لتشغيله للشباب";
     [tabMusic addSubview:self.songLabel];
+    y += 38;
 
-    CGFloat sbw = (w - 16) / 3.0;
-    [tabMusic addSubview:[self makeButton:@"🔍 بحث" frame:CGRectMake(16, 42, sbw, 34) tag:0 action:@selector(searchSong)]];
-    [tabMusic addSubview:[self makeButton:@"🌐 متصفح" frame:CGRectMake(16 + sbw + 8, 42, sbw, 34) tag:0 action:@selector(browseSong)]];
-    [tabMusic addSubview:[self makeButton:@"📂 ملفات" frame:CGRectMake(16 + 2 * (sbw + 8), 42, sbw, 34) tag:0 action:@selector(chooseSong)]];
+    [tabMusic addSubview:[self makeButton:@"🌐 فتح متصفح يوتيوب" frame:CGRectMake(16, y, w, 38) tag:0 action:@selector(browseSong)]];
+    y += 46;
 
-    UISlider *seek = [self makeSliderAt:CGRectMake(16, 84, w, 28) min:0 max:1 value:0 action:@selector(seekChanged:)];
+    UISlider *seek = [self makeSliderAt:CGRectMake(16, y, w, 28) min:0 max:1 value:0 action:@selector(seekChanged:)];
     [seek addTarget:self action:@selector(seekBegan:) forControlEvents:UIControlEventTouchDown];
     [seek addTarget:self action:@selector(seekEnded:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
     [tabMusic addSubview:seek];
     self.seekSlider = seek;
+    y += 32;
 
-    self.timeLabel = [self makeLabelAt:CGRectMake(16, 112, w, 18) size:12 bold:NO alpha:0.7];
+    self.timeLabel = [self makeLabelAt:CGRectMake(16, y, w, 18) size:12 bold:NO alpha:0.7];
     self.timeLabel.text = @"0:00 / 0:00";
     [tabMusic addSubview:self.timeLabel];
+    y += 24;
 
     CGFloat hb = (w - 8) / 2.0;
-    self.playBtn = [self makeButton:@"▶︎ تشغيل" frame:CGRectMake(16, 136, hb, 34) tag:0 action:@selector(playTapped)];
+    self.playBtn = [self makeButton:@"▶︎ تشغيل" frame:CGRectMake(16, y, hb, 36) tag:0 action:@selector(playTapped)];
     [tabMusic addSubview:self.playBtn];
-    [tabMusic addSubview:[self makeButton:@"⏹ إيقاف" frame:CGRectMake(16 + hb + 8, 136, hb, 34) tag:0 action:@selector(stopTapped)]];
+    [tabMusic addSubview:[self makeButton:@"⏹ إيقاف" frame:CGRectMake(16 + hb + 8, y, hb, 36) tag:0 action:@selector(stopTapped)]];
+    y += 44;
 
-    y = 180;
     y = [self addSlider:S_MUSVOL to:tabMusic y:y];
     [self addToggle:T_LOOP     to:tabMusic x:16 y:y width:w]; y += 36;
     [self addToggle:T_MUTE     to:tabMusic x:16 y:y width:w]; y += 36;
@@ -1261,9 +818,6 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     [self addToggle:T_MONITOR  to:tabMusic x:16 y:y width:w]; y += 40;
     y = [self addSlider:S_MONVOL to:tabMusic y:y];
     tabMusic.contentSize = CGSizeMake(kPanelW, y + 10);
-
-    [self refreshModeButtons];
-    [self updatePitchLabel];
 }
 
 - (void)updateSpecLabel:(int)idx {
@@ -1271,13 +825,6 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     int v = (int)lroundf(_sl[idx].value);
     if (v == 0 && sp->zero) _lb[idx].text = sp->zero;
     else _lb[idx].text = [NSString stringWithFormat:@"%@: %d%@", sp->title, v, sp->unit];
-}
-
-- (void)updatePitchLabel {
-    int st = (int)lroundf(self.pitchSlider.value);
-    NSString *t = (st == 0) ? @"النبرة: عادية" : [NSString stringWithFormat:@"النبرة: %+d نغمة", st];
-    if (self.robot) t = [t stringByAppendingString:@"  ·  🤖 روبوت"];
-    self.pitchLabel.text = t;
 }
 
 - (void)tabChanged:(UISegmentedControl *)sender {
@@ -1302,11 +849,6 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     [self applySpec:(int)s.tag value:(int)lroundf(s.value)];
 }
 
-- (void)setSpec:(int)idx to:(int)v {
-    _sl[idx].value = v;
-    [self applySpec:idx value:v];
-}
-
 - (void)setToggle:(int)idx on:(BOOL)on {
     const ToggleSpec *t = &kToggles[idx];
     _sw[idx].on = on;
@@ -1320,119 +862,29 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     [self saveInt:s.on ? 1 : 0 key:t->key];
 }
 
-- (void)refreshModeButtons {
-    for (UIButton *b in (NSArray *)self.modeBtns) {
-        b.backgroundColor = (b.tag == self.mode)
-            ? [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95]
-            : [UIColor colorWithWhite:1 alpha:0.14];
-    }
-}
-
-- (void)applyMode:(NSInteger)m {
-    self.mode = m;
-    DiscordEcho_SetMode((int)m);
-    [self saveInt:(int)m key:kModeKey];
-    [self refreshModeButtons];
-}
-
-- (void)modeTapped:(UIButton *)b { [self applyMode:b.tag]; }
-
-- (void)resetEcho {
-    for (int i = S_LEVEL; i <= S_EQHI; i++) [self setSpec:i to:kSliders[i].def];
-    [self setToggle:T_CAVE on:kToggles[T_CAVE].def != 0];
-    [self setToggle:T_REPEAT on:kToggles[T_REPEAT].def != 0];
-    [self applyMode:0];
-}
-
-- (void)applyEqPreset:(NSInteger)i {
-    static const int idx[5] = { S_EQLOF, S_EQHIF, S_EQLO, S_EQMID, S_EQHI };
-    for (int k = 0; k < 5; k++) [self setSpec:idx[k] to:kEqPresets[i][k]];
-}
-- (void)eqPresetTapped:(UIButton *)b { [self applyEqPreset:b.tag]; }
-- (void)deWaveTapped {
-    [self applyEqPreset:2];
-    [self setSpec:S_MOD to:20];
-    [self setSpec:S_DAMP to:65];
-}
-
-- (void)applyPitch:(int)st robot:(BOOL)robot {
-    if (st < -12) st = -12;
-    if (st > 12) st = 12;
-    self.pitchSlider.value = st;
-    self.robot = robot;
-    DiscordEcho_SetPitch(st);
-    DiscordEcho_SetRobot(robot ? 1 : 0);
-    [self saveInt:st key:kPitchKey];
-    [self saveInt:robot ? 1 : 0 key:kRobotKey];
-    [self updatePitchLabel];
-}
-- (void)pitchChanged:(UISlider *)s { [self applyPitch:(int)lroundf(s.value) robot:self.robot]; }
-- (void)presetTapped:(UIButton *)b {
-    switch (b.tag) {
-        case 0: [self applyPitch:0  robot:NO];  break;
-        case 1: [self applyPitch:5  robot:NO];  break;
-        case 2: [self applyPitch:-4 robot:NO];  break;
-        case 3: [self applyPitch:-9 robot:NO];  break;
-        case 4: [self applyPitch:0  robot:YES]; break;
-        default: {
-            int st = (int)arc4random_uniform(21) - 10;
-            [self applyPitch:st robot:(arc4random_uniform(4) == 0)];
-        }
-    }
-}
-
-- (void)gainQuick:(UIButton *)b { [self setSpec:S_GAIN to:(int)b.tag]; }
-
-- (void)chooseSong {
-    UIDocumentPickerViewController *p =
-        [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.audio"]
-                                                               inMode:UIDocumentPickerModeImport];
-    p.delegate = self;
-    p.allowsMultipleSelection = NO;
-    [self presentViewController:p animated:YES completion:nil];
-}
-
-- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray *)urls {
-    NSURL *url = urls.firstObject;
-    if (url) [self loadSongAtURL:url name:url.lastPathComponent cleanup:NO];
-}
-
 - (void)browseSong {
     EchoBrowserController *vc = [EchoBrowserController new];
     __weak EchoController *ws = self;
-    vc.onPick = ^(NSURL *url, NSString *name) { [ws loadSongAtURL:url name:name cleanup:YES]; };
+    vc.onPick = ^(NSURL *url, NSString *name) { [ws loadSongAtURL:url name:name]; };
     vc.modalPresentationStyle = UIModalPresentationFullScreen;
     [self presentViewController:vc animated:YES completion:nil];
 }
 
-- (void)searchSong {
-    EchoSearchController *vc = [EchoSearchController new];
-    __weak EchoController *ws = self;
-    vc.onPick = ^(NSURL *url, NSString *name) { [ws loadSongAtURL:url name:name cleanup:YES]; };
-    [self presentViewController:vc animated:YES completion:nil];
-}
-
-- (void)loadSongAtURL:(NSURL *)url name:(NSString *)name cleanup:(BOOL)cleanup {
+- (void)loadSongAtURL:(NSURL *)url name:(NSString *)name {
     DiscordEcho_MusicPlay(0);
-    self.songLabel.text = [NSString stringWithFormat:@"⏳ جاري التحميل: %@", name];
+    self.songLabel.text = [NSString stringWithFormat:@"⏳ جاري تحويل وتحميل: %@", name];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         size_t count = 0;
         BOOL truncated = NO;
-        float *buf = EchoDecodeFile(url, &count, &truncated, ^(float p) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                self.songLabel.text = [NSString stringWithFormat:@"⏳ فك الأغنية %d%%: %@", (int)(p * 100), name];
-            });
-        });
-        if (cleanup) [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
+        float *buf = EchoDecodeFile(url, &count, &truncated, nil);
+        [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!buf) {
-                self.songLabel.text = @"❌ ما قدرت أقرأ الملف";
+                self.songLabel.text = @"❌ فشل تحميل المقطع";
                 return;
             }
             DiscordEcho_MusicLoad(buf, count);
-            NSString *t = [NSString stringWithFormat:@"🎵 %@", name];
-            if (truncated) t = [t stringByAppendingString:@" (أول 8 دقايق)"];
-            self.songLabel.text = t;
+            self.songLabel.text = [NSString stringWithFormat:@"🎵 شغال: %@", name];
             [self refreshMusicUI];
         });
     });
@@ -1443,7 +895,7 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     float prog = DiscordEcho_MusicProgress();
     if (!self.seeking) self.seekSlider.value = prog;
     self.timeLabel.text = [NSString stringWithFormat:@"%@ / %@", EchoTime(prog * dur), EchoTime(dur)];
-    [self.playBtn setTitle:(DiscordEcho_MusicIsPlaying() ? @"⏸ إيقاف مؤقت" : @"▶︎ تشغيل") forState:UIControlStateNormal];
+    [self.playBtn setTitle:(DiscordEcho_MusicIsPlaying() ? @"⏸ إيقاف" : @"▶︎ تشغيل") forState:UIControlStateNormal];
 }
 
 - (void)playTapped {
@@ -1465,99 +917,23 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     self.seeking = NO;
 }
 
-- (void)startTimer {
-    if (self.timer) return;
-    __weak EchoController *ws = self;
-    self.timer = [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES block:^(NSTimer *t) {
-        EchoController *s = ws;
-        if (!s || s.panel.hidden) return;
-        NSInteger tab = s.tabs.selectedSegmentIndex;
-        if (tab == TAB_AMP) {
-            float pk = DiscordEcho_GetPeak();
-            if (pk > 1.0f) pk = 1.0f;
-            s.meter.progress = pk;
-            s.meter.progressTintColor = (pk > 0.98f) ? [UIColor systemRedColor]
-                                      : (pk > 0.8f)  ? [UIColor systemOrangeColor]
-                                                     : [UIColor systemGreenColor];
-            unsigned c = DiscordEcho_RenderCount();
-            NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-            if (c != s.lastRender) { s.lastRender = c; s.lastRenderTime = now; }
-            BOOL live = (c != 0) && (now - s.lastRenderTime) < 0.6;
-            s.micStatus.text = live ? @"🟢 المايك شغال" : @"🔴 المايك مو شغال";
-            s.micStatus.textColor = live ? [UIColor systemGreenColor] : [UIColor systemOrangeColor];
-            BOOL selfOn = s->_sw[T_SELFMON].on;
-            s.monWarn.text = (selfOn && !echo_headphones()) ? @"⚠️ وصّل سماعات لمنع الصفير" : @"";
-        } else if (tab == TAB_MUSIC) {
-            [s refreshMusicUI];
-        }
-    }];
-}
-
-- (void)stopTimer {
-    [self.timer invalidate];
-    self.timer = nil;
-}
-
 - (void)togglePanel {
     self.panel.hidden = !self.panel.hidden;
-    if (self.panel.hidden) {
-        [self stopTimer];
-    } else {
-        [self positionPanel];
-        [self startTimer];
+    if (!self.panel.hidden) {
+        CGRect b = self.view.bounds;
+        CGFloat w = kPanelW, h = MIN(kPanelH, b.size.height - 20);
+        self.panel.frame = CGRectMake((b.size.width - w)/2, (b.size.height - h)/2, w, h);
     }
 }
-
-- (void)positionPanel {
-    CGRect b = self.view.bounds;
-    CGFloat w = kPanelW;
-    CGFloat h = MIN(kPanelH, b.size.height - 20);
-    CGFloat x = CGRectGetMidX(self.fab.frame) - w / 2;
-    x = MAX(10, MIN(x, b.size.width - w - 10));
-    CGFloat y = CGRectGetMaxY(self.fab.frame) + 10;
-    if (y + h > b.size.height - 10) y = CGRectGetMinY(self.fab.frame) - h - 10;
-    y = MAX(10, y);
-    self.panel.frame = CGRectMake(x, y, w, h);
-}
-
-- (void)dragFab:(UIPanGestureRecognizer *)g {
-    CGPoint t = [g translationInView:self.view];
-    self.fab.center = CGPointMake(self.fab.center.x + t.x, self.fab.center.y + t.y);
-    [g setTranslation:CGPointZero inView:self.view];
-    [self clampFab];
-    if (!self.panel.hidden) [self positionPanel];
-}
-
-- (void)clampFab {
-    CGRect b = self.view.bounds;
-    UIEdgeInsets s = self.view.safeAreaInsets;
-    CGFloat r = 26;
-    CGPoint c = self.fab.center;
-    c.x = MAX(r + s.left, MIN(c.x, b.size.width - r - s.right));
-    c.y = MAX(r + s.top,  MIN(c.y, b.size.height - r - s.bottom));
-    self.fab.center = c;
-}
-
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
-    [self clampFab];
-    if (!self.panel.hidden) [self positionPanel];
-}
-
 @end
 
-#pragma mark - تهيئة النافذة فوق ديسكورد
-
 static EchoWindow *gWin;
-
 static void echo_setup_window(void) {
     if (gWin) return;
     UIWindowScene *scene = nil;
     for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
-        if ([s isKindOfClass:UIWindowScene.class] &&
-            s.activationState == UISceneActivationStateForegroundActive) {
-            scene = (UIWindowScene *)s;
-            break;
+        if ([s isKindOfClass:UIWindowScene.class] && s.activationState == UISceneActivationStateForegroundActive) {
+            scene = (UIWindowScene *)s; break;
         }
     }
     if (!scene) return;
@@ -1568,36 +944,10 @@ static void echo_setup_window(void) {
     gWin.hidden = NO;
 }
 
-static void echo_apply_saved(void) {
-    for (int i = 0; i < S_COUNT; i++)
-        kSliders[i].set(EchoInt(kSliders[i].key, kSliders[i].def));
-    for (int i = 0; i < T_COUNT; i++)
-        kToggles[i].set(EchoInt(kToggles[i].key, kToggles[i].def));
-    DiscordEcho_SetMode(EchoInt(kModeKey, 0));
-    DiscordEcho_SetPitch(EchoInt(kPitchKey, 0));
-    DiscordEcho_SetRobot(EchoInt(kRobotKey, 0));
-}
-
 __attribute__((constructor))
 static void echo_ui_init(void) {
-    echo_apply_saved();
-
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
-    [nc addObserverForName:UIApplicationDidBecomeActiveNotification
-                    object:nil
-                     queue:[NSOperationQueue mainQueue]
-                usingBlock:^(NSNotification *n) {
-        gAppReady = YES;
-        echo_setup_window();
-        echo_monitor_sync();
-    }];
-    
-    [nc addObserverForName:AVAudioSessionRouteChangeNotification
-                    object:nil
-                     queue:[NSOperationQueue mainQueue]
-                usingBlock:^(NSNotification *n) {
-        gAppReady = YES;
-        DiscordEcho_ResetAll();
-        echo_monitor_sync();
+    [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
+        gAppReady = YES; echo_setup_window(); echo_monitor_sync();
     }];
 }
