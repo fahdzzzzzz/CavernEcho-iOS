@@ -1,4 +1,4 @@
-// DiscordEchoUI: متصفح يوتيوب مباشر يلقط رابط الفيديو، يستخرج الصوت تلقائياً، ويدمجه بالمايك
+// DiscordEchoUI: متصفح يوتيوب مع زر تحميل وتحويل مباشر إلى MP3 وإضافته للأداة
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -176,16 +176,6 @@ static void echo_set_selfmon(int on) {
     echo_monitor_sync();
 }
 
-static BOOL echo_headphones(void) {
-    NSArray *outs = AVAudioSession.sharedInstance.currentRoute.outputs;
-    if (outs.count == 0) return YES;
-    for (AVAudioSessionPortDescription *o in outs) {
-        if ([o.portType isEqualToString:AVAudioSessionPortBuiltInSpeaker] ||
-            [o.portType isEqualToString:AVAudioSessionPortBuiltInReceiver]) return NO;
-    }
-    return YES;
-}
-
 static const ToggleSpec kToggles[T_COUNT] = {
     [T_CAVE]     = { @"كهف 👻",                    @"DiscordEchoCave",     1, DiscordEcho_SetCave },
     [T_REPEAT]   = { @"تكرار 🔁",                  @"DiscordEchoRepeat",   1, DiscordEcho_SetRepeat },
@@ -293,7 +283,7 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - متصفح يوتيوب المباشر (مع استخراج صوت ذكي عبر عدة سيرفرات)
+#pragma mark - متصفح يوتيوب مع زر التحويل المباشر إلى MP3
 
 @interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
@@ -302,7 +292,7 @@ static NSString *EchoTime(float s) {
 @property (nonatomic, strong) UIScrollView *tabBar;
 @property (nonatomic, strong) UITextField *addr;
 @property (nonatomic, strong) UIButton *closeBtn;
-@property (nonatomic, strong) UIButton *backBtn;
+@property (nonatomic, strong) UIButton *downloadBtn;
 @property (nonatomic, strong) NSArray *quick;
 @property (nonatomic, strong) UILabel *status;
 @end
@@ -315,7 +305,7 @@ static NSString *EchoTime(float s) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
     [b setTitle:t forState:UIControlStateNormal];
     [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    b.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+    b.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14];
     b.layer.cornerRadius = 9;
     b.tag = tag;
@@ -331,16 +321,17 @@ static NSString *EchoTime(float s) {
     self.cur = -1;
 
     self.closeBtn = [self pill:@"✕ إغلاق" action:@selector(closeTapped) tag:0];
-    self.backBtn = [self pill:@"◀︎ رجوع" action:@selector(backTapped) tag:0];
+    self.downloadBtn = [self pill:@"📥 تحميل MP3" action:@selector(downloadTapped) tag:0];
+    self.downloadBtn.backgroundColor = [UIColor systemBlueColor];
     [self.view addSubview:self.closeBtn];
-    [self.view addSubview:self.backBtn];
+    [self.view addSubview:self.downloadBtn];
 
     self.addr = [[UITextField alloc] init];
     self.addr.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
     self.addr.textColor = UIColor.whiteColor;
     self.addr.layer.cornerRadius = 9;
-    self.addr.font = [UIFont systemFontOfSize:14];
-    self.addr.placeholder = @"ابحث في يوتيوب أو الصق رابط الفيديو هنا";
+    self.addr.font = [UIFont systemFontOfSize:13];
+    self.addr.placeholder = @"ابحث في يوتيوب أو الصق الرابط هنا";
     self.addr.keyboardType = UIKeyboardTypeURL;
     self.addr.autocapitalizationType = UITextAutocapitalizationTypeNone;
     self.addr.autocorrectionType = UITextAutocorrectionTypeNo;
@@ -369,7 +360,7 @@ static NSString *EchoTime(float s) {
     self.status.font = [UIFont systemFontOfSize:12];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
     self.status.numberOfLines = 2;
-    self.status.text = @"اضغط على أي فيديو، وسأسحب الصوت وأشغله لك تلقائياً.";
+    self.status.text = @"افتح الفيديو واضغط زر (تحميل MP3) بالاعلى لنقله للأداة.";
     [self.view addSubview:self.status];
 
     [self openTabWithConfig:nil];
@@ -380,10 +371,12 @@ static NSString *EchoTime(float s) {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds;
     CGFloat top = 10;
-    self.backBtn.frame = CGRectMake(12, top, 84, 34);
-    self.closeBtn.frame = CGRectMake(b.size.width - 96, top, 84, 34);
-    CGFloat qx = 104, qw = (b.size.width - 104 - 104 - 12) / 3.0;
-    for (NSInteger i = 0; i < 3; i++) ((UIView *)self.quick[i]).frame = CGRectMake(qx + i * (qw + 6), top, qw, 34);
+    self.downloadBtn.frame = CGRectMake(12, top, 100, 34);
+    self.closeBtn.frame = CGRectMake(b.size.width - 84, top, 72, 34);
+    
+    CGFloat qx = 118, qw = (b.size.width - 118 - 84 - 16) / 3.0;
+    for (NSInteger i = 0; i < 3; i++) ((UIView *)self.quick[i]).frame = CGRectMake(qx + i * (qw + 4), top, qw, 34);
+    
     self.addr.frame = CGRectMake(12, 50, b.size.width - 24, 36);
     self.tabBar.frame = CGRectMake(0, 92, b.size.width, 34);
     CGFloat sh = 44;
@@ -458,7 +451,6 @@ static NSString *EchoTime(float s) {
     for (WKWebView *w in self.tabs) [w stopLoading];
     [self dismissViewControllerAnimated:YES completion:nil];
 }
-- (void)backTapped { if (self.web.canGoBack) [self.web goBack]; }
 
 - (void)quickTapped:(UIButton *)b {
     NSArray *urls = @[@"https://www.youtube.com", @"https://pixabay.com/music/", @"https://archive.org/details/audio"];
@@ -485,87 +477,108 @@ static NSString *EchoTime(float s) {
     return YES;
 }
 
-// التقاط رابط الفيديو عند الضغط عليه في المتصفح وتحويله تلقائياً
-- (void)webView:(WKWebView *)wv decidePolicyForNavigationAction:(WKNavigationAction *)a decisionHandler:(void (^)(WKNavigationActionPolicy))h {
-    NSURL *url = a.request.URL;
-    NSString *urlString = url.absoluteString;
-    
-    if ([urlString containsString:@"youtube.com/watch?v="] || [urlString containsString:@"youtu.be/"]) {
-        NSString *videoId = nil;
-        if ([urlString containsString:@"youtu.be/"]) {
-            NSArray *parts = [urlString componentsSeparatedByString:@"youtu.be/"];
-            if (parts.count > 1) videoId = [[parts[1] componentsSeparatedByString:@"?"] firstObject];
-        } else {
-            NSArray *parts = [urlString componentsSeparatedByString:@"v="];
-            if (parts.count > 1) videoId = [[parts[1] componentsSeparatedByString:@"&"] firstObject];
-        }
-        
-        if (videoId && videoId.length > 0) {
-            self.status.text = @"⏳ جاري استخراج الصوت من يوتيوب وتشغيله...";
-            NSArray *instances = @[
-                @"https://pipedapi.kavin.rocks",
-                @"https://pipedapi.privacy.com.de",
-                @"https://api.invidious.io"
-            ];
-            [self fetchYouTubeWithInstances:instances index:0 videoId:videoId];
-            h(WKNavigationActionPolicyCancel);
-            return;
-        }
+// عند الضغط على زر تحميل MP3 اليدوي
+- (void)downloadTapped {
+    NSURL *currentURL = self.web.URL;
+    if (!currentURL) {
+        self.status.text = @"❌ لا يوجد رابط مفتوح حالياً.";
+        return;
     }
-    h(WKNavigationActionPolicyAllow);
+    
+    NSString *urlString = currentURL.absoluteString;
+    // نسخ الرابط للحافظة للاحتياط
+    UIPasteboard.generalPasteboard.string = urlString;
+    
+    if (![urlString containsString:@"youtube.com"] && ![urlString containsString:@"youtu.be"]) {
+        self.status.text = @"⚠️ افتح فيديو يوتيوب أولاً ثم اضغط تحميل.";
+        return;
+    }
+    
+    self.status.text = @"⏳ جاري تحويل الرابط إلى MP3...";
+    [self convertAndDownloadURL:urlString];
 }
 
-- (void)fetchYouTubeWithInstances:(NSArray *)instances index:(NSInteger)idx videoId:(NSString *)videoId {
-    if (idx >= (NSInteger)instances.count) {
+- (void)convertAndDownloadURL:(NSString *)ytUrl {
+    // استخدام عدة سيرفرات API لتحويل الفيديو وتحميله
+    NSArray *servers = @[
+        @"https://pipedapi.kavin.rocks",
+        @"https://pipedapi.privacy.com.de"
+    ];
+    [self tryServerList:servers index:0 url:ytUrl];
+}
+
+- (void)tryServerList:(NSArray *)servers index:(NSInteger)idx url:(NSString *)ytUrl {
+    if (idx >= (NSInteger)servers.count) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.status.text = @"❌ تعذر استخراج الصوت من هذا الفيديو.";
+            self.status.text = @"❌ فشل التحويل، تأكد أنك داخل صفحة فيديو يوتيوب.";
         });
         return;
     }
     
-    NSString *base = instances[idx];
+    NSString *videoId = nil;
+    if ([ytUrl containsString:@"youtu.be/"]) {
+        NSArray *parts = [ytUrl componentsSeparatedByString:@"youtu.be/"];
+        if (parts.count > 1) videoId = [[parts[1] componentsSeparatedByString:@"?"] firstObject];
+    } else if ([ytUrl containsString:@"v="]) {
+        NSArray *parts = [ytUrl componentsSeparatedByString:@"v="];
+        if (parts.count > 1) videoId = [[parts[1] componentsSeparatedByString:@"&"] firstObject];
+    }
+    
+    if (!videoId || videoId.length == 0) {
+        self.status.text = @"❌ يرجى الدخول إلى صفحة فيديو محدد.";
+        return;
+    }
+    
+    NSString *base = servers[idx];
     NSString *api = [NSString stringWithFormat:@"%@/api/v1/streams/%@", base, videoId];
     __weak EchoBrowserController *ws = self;
     
     NSURLSessionDataTask *t = [NSURLSession.sharedSession dataTaskWithURL:[NSURL URLWithString:api]
         completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-        if (e) {
-            [ws fetchYouTubeWithInstances:instances index:idx + 1 videoId:videoId];
+        if (e || !d) {
+            [ws tryServerList:servers index:idx + 1 url:ytUrl];
             return;
         }
         
-        id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        id json = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
         NSString *streamUrl = nil;
-        NSString *title = @"فيديو يوتيوب";
+        NSString *title = @"مقطع يوتيوب";
         
-        if ([j isKindOfClass:NSDictionary.class]) {
-            title = j[@"title"] ?: @"فيديو يوتيوب";
-            NSArray *audioStreams = j[@"audioStreams"];
-            if ([audioStreams isKindOfClass:NSArray.class] && audioStreams.count > 0) {
+        if ([json isKindOfClass:[NSDictionary class]]) {
+            title = json[@"title"] ?: @"مقطع يوتيوب";
+            NSArray *audioStreams = json[@"audioStreams"];
+            if ([audioStreams isKindOfClass:[NSArray class]] && audioStreams.count > 0) {
                 streamUrl = audioStreams.firstObject[@"url"];
             }
         }
         
         if (!streamUrl) {
-            [ws fetchYouTubeWithInstances:instances index:idx + 1 videoId:videoId];
+            [ws tryServerList:servers index:idx + 1 url:ytUrl];
             return;
         }
         
-        NSURL *audioURL = [NSURL URLWithString:streamUrl];
-        NSURLSessionDownloadTask *dt = [NSURLSession.sharedSession downloadTaskWithURL:audioURL
+        dispatch_async(dispatch_get_main_queue(), ^{
+            ws.status.text = @"📥 جاري تحميل الملف الصوتي...";
+        });
+        
+        NSURLSessionDownloadTask *dt = [NSURLSession.sharedSession downloadTaskWithURL:[NSURL URLWithString:streamUrl]
             completionHandler:^(NSURL *loc, NSURLResponse *resp, NSError *derr) {
             if (!loc || derr) {
-                [ws fetchYouTubeWithInstances:instances index:idx + 1 videoId:videoId];
+                [ws tryServerList:servers index:idx + 1 url:ytUrl];
                 return;
             }
-            NSString *fn = [NSString stringWithFormat:@"echo_%u.m4a", arc4random()];
+            
+            NSString *fn = [NSString stringWithFormat:@"echo_%u.mp3", (unsigned)arc4random()];
             NSURL *dest = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:fn]];
             [[NSFileManager defaultManager] removeItemAtURL:dest error:nil];
+            
             if ([[NSFileManager defaultManager] moveItemAtURL:loc toURL:dest error:nil]) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    ws.status.text = [NSString stringWithFormat:@"✅ شغال الآن: %@", title];
+                    ws.status.text = @"✅ تمت الإضافة للأداة بنجاح!";
                     void (^cb)(NSURL *, NSString *) = ws.onPick;
-                    [ws dismissViewControllerAnimated:YES completion:^{ if (cb) cb(dest, title); }];
+                    [ws dismissViewControllerAnimated:YES completion:^{
+                        if (cb) cb(dest, title);
+                    }];
                 });
             }
         }];
@@ -869,9 +882,9 @@ static NSString *EchoTime(float s) {
     y += 40;
     tabAmp.contentSize = CGSizeMake(kPanelW, y + 10);
 
-    // 5. تبويب الأغاني والمتصفح المباشر
+    // 5. تبويب الأغاني والمتصفح
     self.songLabel = [self makeLabelAt:CGRectMake(16, 4, w, 34) size:13 bold:YES alpha:1];
-    self.songLabel.text = @"لم يتم اختيار أغنية. افتح متصفح يوتيوب واختر فيديو.";
+    self.songLabel.text = @"لم يتم اختيار أغنية. افتح متصفح يوتيوب واضغط تحميل MP3.";
     [tabMusic addSubview:self.songLabel];
 
     [tabMusic addSubview:[self makeButton:@"🌐 فتح متصفح يوتيوب" frame:CGRectMake(16, 44, w, 38) tag:0 action:@selector(browseSong)]];
