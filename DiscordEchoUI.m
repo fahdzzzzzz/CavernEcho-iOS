@@ -1,4 +1,4 @@
-// DiscordEchoUI: متصفح يوتيوب + زر تحميل + خيار اختيار ملف MP3 من الجهاز مباشرة
+// DiscordEchoUI: الكود المصحح وخالي من أخطاء البناء
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -180,7 +180,7 @@ static const ToggleSpec kToggles[T_COUNT] = {
     [T_CAVE]     = { @"كهف 👻",                    @"DiscordEchoCave",     1, DiscordEcho_SetCave },
     [T_REPEAT]   = { @"تكرار 🔁",                  @"DiscordEchoRepeat",   1, DiscordEcho_SetRepeat },
     [T_LOOP]     = { @"🔁 تكرار الأغنية",          @"DiscordEchoMusicLoop", 0, DiscordEcho_MusicSetLoop },
-    [T_MUTE]     = { @"🔇 كتم صوتي أثناء الأغنية", @"DiscordEchoVoiceMute", 0, DiscordEcho_VoiceMute },
+    [T_MUTE]     = { @"🔇 كتم صوتي أثناء الأغنية", @"DiscordEchoVoiceMute", 0, DiscordEcho_SetVoiceMute }, // تم التصحيح هنا
     [T_SONGECHO] = { @"👻 الصدى على الأغنية",      @"DiscordEchoSongEcho", 1, DiscordEcho_SetSongEcho },
     [T_MONITOR]  = { @"🎧 أنا أسمع الأغنية",       @"DiscordEchoMonitor",  0, echo_set_monitor },
     [T_SELFMON]  = { @"🎧 أسمع صوتي (مع الصدى)",   @"DiscordEchoSelfMon",  0, echo_set_selfmon },
@@ -495,7 +495,7 @@ static NSString *EchoTime(float s) {
     [self convertAndDownloadURL:urlString];
 }
 
-- (void)convertAndDownloadURL:(NSString * )ytUrl {
+- (void)convertAndDownloadURL:(NSString *)ytUrl {
     NSArray *servers = @[
         @"https://pipedapi.kavin.rocks",
         @"https://pipedapi.privacy.com.de"
@@ -589,7 +589,7 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - الواجهة الرئيسية مع زر اختيار ملف MP3 من الجهاز
+#pragma mark - الواجهة الرئيسية
 
 @interface EchoController : UIViewController <UIDocumentPickerDelegate> {
     UISlider *_sl[S_COUNT];
@@ -1043,7 +1043,6 @@ static NSString *EchoTime(float s) {
     [self presentViewController:vc animated:YES completion:nil];
 }
 
-// زر اختيار ملف MP3 مباشرة من جوالك (مضمون 100%)
 - (void)pickAudioFile {
     UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeAudio, UTTypeMP3, UTTypeMPEG4Audio] asCopy:YES];
     picker.delegate = self;
