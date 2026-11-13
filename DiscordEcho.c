@@ -1,12 +1,11 @@
 // DiscordEcho: معالج صوت المايك داخل تطبيق (مثل ديسكورد)
 //   - تغيير النبرة (pitch) من -12 إلى +12 نغمة + صوت روبوت
-//   - صدى "كهف مسكون": تكرار مبعثر (Multi-Tap Delay) + كهف (reverb) مع تحكم كامل:
-//       شدة عامة، مضخّم، مدى، شدة الكهف، شدة التكرار، سرعة/تشتيت/عدد التكرارات
+//   - صدى "كهف مسكون": تكرار مبعثر (Multi-Tap Delay) + كهف (reverb) مع تحكم كامل
 //   - موازن ترددات (EQ) للصدى + تغميق الذيل + تنعيم الموجة (modulation)
 //   - مودات صدى جاهزة، كل واحد لحاله: ديلاي، ديلاي شريط، غرفة، قاعة، ستاديوم، فضاء
 //   - تضخيم الصوت 100%..1600% مع حد ناعم
-//   - مشغّل أغنية (بما فيها اليوتيوب): تتمزج داخل المايك + يطبّق عليها الصدى + تقدر تسمعها أنت (مراقبة)
-// يعمل عبر fishhook: يستبدل AudioUnitRender ويعدّل بيانات المايك قبل ما يرسلها التطبيق[span_2](start_span)[span_2](end_span)[span_3](start_span)[span_3](end_span).
+//   - مشغّل أغنية (بما فيها اليوتيوب): تتمزج داخل المايك + يطبّق عليها الصدى + تسمعها أنت (مراقبة)
+// يعمل عبر fishhook: يستبدل AudioUnitRender ويعدّل بيانات المايك قبل ما يرسلها التطبيق.
 
 #include <AudioToolbox/AudioToolbox.h>
 #include <stdint.h>
@@ -30,9 +29,9 @@ static volatile int   g_cave  = 1;      // كهف
 static volatile int   g_repeat = 1;     // تكرار
 static volatile int   g_cave_amt = 100; // شدة الكهف 0..100
 static volatile int   g_rep_amt = 100;  // شدة التكرار 0..100
-static volatile int   g_tap_speed = 100;// سرعة/تردد التكرار 50..300 (%)  (أكبر = أبطأ وأبعد)
+static volatile int   g_tap_speed = 100;// سرعة/تردد التكرار 50..300 (%)
 static volatile int   g_tap_fb = 60;    // عدد التكرارات 0..100
-static volatile int   g_tap_scatter = 100; // التبعثر 0..100 (0 = منتظم، 100 = مبعثر زي الكرت)
+static volatile int   g_tap_scatter = 100; // التبعثر 0..100
 static volatile int   g_damp = 40;      // تغميق الذيل 0..100
 static volatile int   g_mod = 50;       // تنعيم الموجة 0..100
 static volatile int   g_eq_lo_f = 200;  // تردد حد الجهير (Hz)
@@ -40,7 +39,7 @@ static volatile int   g_eq_hi_f = 3500; // تردد حد الحاد (Hz)
 static volatile int   g_eq_lo = 100;    // قوة الجهير 0..200 (%)
 static volatile int   g_eq_mid = 100;   // قوة الوسط 0..200 (%)
 static volatile int   g_eq_hi = 100;    // قوة الحاد 0..200 (%)
-static volatile int   g_mode = 0;       // 0 = كهف مسكون (حسب الأزرار)، 1..6 = مودات جاهزة
+static volatile int   g_mode = 0;       // 0 = كهف مسكون، 1..6 = مودات جاهزة
 static volatile int   g_song_echo = 1;  // تطبيق الصدى على الأغنية
 static volatile int   g_monitor = 0;    // أنت تسمع الأغنية
 static volatile int   g_mon_vol = 100;  // مستوى المراقبة 0..200
@@ -52,7 +51,7 @@ static volatile float g_peak  = 0.0f;   // مستوى المايك 0..1
 
 static volatile int   g_selfmon = 0;      // أسمع صوتي (بعد المعالجة)
 static volatile int   g_selfmon_vol = 100;// مستوى سماع صوتي 0..200
-static volatile unsigned g_render_count = 0; // عدّاد دفعات المايك (يدل أن المايك شغال)
+static volatile unsigned g_render_count = 0; // عدّاد دفعات المايك
 
 static int clampi(int v, int a, int b) { return v < a ? a : (v > b ? b : v); }
 
@@ -86,7 +85,30 @@ void DiscordEcho_SetSelfMonitor(int on) { g_selfmon = on ? 1 : 0; }
 void DiscordEcho_SetSelfMonitorVolume(int v) { g_selfmon_vol = clampi(v, 0, 200); }
 unsigned DiscordEcho_RenderCount(void) { return g_render_count; }
 
-// ---------- دالة تفريغ الذاكرة وإلغاء التشوه والتقطيع عند تبديل المايك ----------
+// ---------- تعريفات هياكل البيانات الأساسية (تم نقلها للأعلى لتجنب أخطاء المتغيرات) ----------
+#define RV_COMBS    8
+#define RV_APS      4
+#define RV_COMB_MAX 16384
+#define RV_AP_MAX   2048
+
+typedef struct {
+    float comb[RV_COMBS][RV_COMB_MAX];
+    float damp[RV_COMBS];
+    unsigned cpos[RV_COMBS];
+    float lph[RV_COMBS];
+    int inited;
+    float ap[RV_APS][RV_AP_MAX];
+    unsigned apos[RV_APS];
+} Reverb;
+
+typedef struct {
+    float line[LINE_LEN];
+    size_t pos;
+    float tape;
+    float eq_lo, eq_lp2;
+    Reverb rv;
+} EchoCtx;
+
 static EchoCtx g_ctx[NCTX];
 static int g_cleared[NCTX];
 
@@ -127,28 +149,12 @@ static float soft_limit(float y) {
     return y < 0 ? -s : s;
 }
 
-// ---------- كهف (reverb): 8 مرشحات comb + 4 allpass، مع تموّج بسيط يكسر الرنين ----------
-#define RV_COMBS    8
-#define RV_APS      4
-#define RV_COMB_MAX 16384   // لازم يكون من مضاعفات 2
-#define RV_AP_MAX   2048
-
-typedef struct {
-    float comb[RV_COMBS][RV_COMB_MAX];
-    float damp[RV_COMBS];
-    unsigned cpos[RV_COMBS];
-    float lph[RV_COMBS];
-    int inited;
-    float ap[RV_APS][RV_AP_MAX];
-    unsigned apos[RV_APS];
-} Reverb;
-
 static const int kCombBase[RV_COMBS] = {1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617};
 static const int kApBase[RV_APS] = {556, 441, 341, 225};
 
-// ---------- بارامترات الصدى (تتحسب مرة لكل دفعة) ----------
+// ---------- بارامترات الصدى ----------
 typedef struct {
-    int kind;                 // 0 = كهف+تكرار مبعثر، 1 = ديلاي بسيط، 2 = ريفيرب فقط
+    int kind;
     int rep, cave, tape;
     size_t tapD[8];
     float tapG[8];
@@ -611,7 +617,7 @@ static OSStatus my_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
                                  kAudioUnitScope_Output, 1, &g_fmt, &sz) == noErr) {
             g_unit = unit;
             g_have_fmt = 1;
-            DiscordEcho_ResetAll(); // تفريغ الذاكرة وتصفية التشوه تلقائياً عند إعادة التهيئة
+            DiscordEcho_ResetAll();
         } else {
             g_have_fmt = 0;
             return st;
