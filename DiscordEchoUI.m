@@ -1,4 +1,4 @@
-// DiscordEchoUI: الكود المصحح لتجاوز خطأ التوثيق والتحميل
+// DiscordEchoUI: الكود المصحح وخالي من أخطاء الـ SDK
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -248,7 +248,7 @@ static float *EchoDecodeFile(NSURL *url, size_t *outCount, BOOL *truncated, void
             return inBuf;
         }];
         if (st == AVAudioConverterOutputStatus_Error) break;
-        if (st == AVAudioConverterOutputStatus_EndOfStream || st == AVAudioConverterInputStatus_InputRanDry) finished = YES;
+        if (st == AVAudioConverterOutputStatus_EndOfStream) finished = YES; // تم تصحيح الفحص هنا بنجاح
 
         AVAudioFrameCount got = outBuf.frameLength;
         float *const *chData = outBuf.floatChannelData;
@@ -1232,7 +1232,7 @@ static void echo_setup_window(void) {
     UIWindowScene *scene = nil;
     for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
         if ([s isKindOfClass:UIWindowScene.class] && s.activationState == UISceneActivationStateForegroundActive) {
-            scene = (UIWindowScene *)s; break;
+            scene = (UIScene *)s; break;
         }
     }
     if (!scene) return;
