@@ -103,7 +103,7 @@ static const SliderSpec kSliders[S_COUNT] = {
     [S_EQLO]     = { @"الجهير",                @"%",    @"DiscordEchoEqLo",    0, 200, 100, DiscordEcho_SetEqLo,          nil },
     [S_EQMID]    = { @"الوسط",                 @"%",    @"DiscordEchoEqMid",   0, 200, 100, DiscordEcho_SetEqMid,         nil },
     [S_EQHI]     = { @"الحاد",                 @"%",    @"DiscordEchoEqHi",    0, 200, 100, DiscordEcho_SetEqHi,          nil },
-    [S_GAIN]     = { @"تضخيم الصوت",           @"%",    @"DiscordEchoGain",  100, 800, 100, DiscordEcho_SetGain,          nil },
+    [S_GAIN]     = { @"تضخيم الصوت",           @"%",    @"DiscordEchoGain",  100, 1600, 100, DiscordEcho_SetGain,          nil },
     [S_MUSVOL]   = { @"مستوى الأغنية",         @"%",    @"DiscordEchoMusicVol", 0, 200, 100, DiscordEcho_MusicSetVolume,  nil },
     [S_MONVOL]   = { @"مستوى سماعك للأغنية",   @"%",    @"DiscordEchoMonVol",  0, 200, 100, DiscordEcho_SetMonitorVolume, nil },
     [S_SELFVOL]  = { @"مستوى سماعك لصوتك",     @"%",    @"DiscordEchoSelfVol", 0, 200, 100, DiscordEcho_SetSelfMonitorVolume, nil },
@@ -217,7 +217,7 @@ static const int kEqPresets[5][5] = {
 static const double kTargetRate = 48000.0;
 static const size_t kMaxSamples = 48000 * 60 * 8;   // أقصى 8 دقائق
 
-static float *EchoDecodeFile(NSURL *url, size_t *outCount, BOOL *truncated) {
+static float *EchoDecodeFile(NSURL *url, size_t *outCount, BOOL *truncated, void (^progress)(float)) {
     *outCount = 0;
     *truncated = NO;
     NSError *err = nil;
@@ -240,9 +240,10 @@ static float *EchoDecodeFile(NSURL *url, size_t *outCount, BOOL *truncated) {
     if (!out) return NULL;
     size_t n = 0;
 
-    const AVAudioFrameCount chunk = 4096;
+    const AVAudioFrameCount chunk = 32768;
     AVAudioPCMBuffer *outBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:dst frameCapacity:chunk];
     BOOL finished = NO;
+    NSTimeInterval lastProg = 0;
     while (!finished && n < cap) {
         NSError *cerr = nil;
         AVAudioConverterOutputStatus st = [conv convertToBuffer:outBuf
@@ -276,6 +277,13 @@ static float *EchoDecodeFile(NSURL *url, size_t *outCount, BOOL *truncated) {
             out[n++] = s / (float)chans;      // دمج القنوات إلى أحادي
         }
         if (got == 0) finished = YES;
+        if (progress && file.length > 0) {
+            NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+            if (now - lastProg > 0.25) {
+                lastProg = now;
+                progress((float)((double)file.framePosition / (double)file.length));
+            }
+        }
     }
     if (!finished && n >= cap && cap == kMaxSamples) *truncated = YES;
     if (n < 2) { free(out); return NULL; }
@@ -328,7 +336,7 @@ static NSString *EchoTime(float s) {
     [self.closeBtn addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.closeBtn];
 
-    self.src = [[UISegmentedControl alloc] initWithItems:@[@"🎵 مشاهير (30 ث)", @"🆓 كاملة", @"Audius"]];
+    self.src = [[UISegmentedControl alloc] initWithItems:@[@"🎵 مشاهير", @"🆓 Archive", @"Audius", @"Openverse"]];
     self.src.selectedSegmentIndex = 0;
     self.src.selectedSegmentTintColor = [UIColor colorWithWhite:1 alpha:0.28];
     NSDictionary *white = @{ NSForegroundColorAttributeName: UIColor.whiteColor,
@@ -383,7 +391,8 @@ static NSString *EchoTime(float s) {
     switch (self.src.selectedSegmentIndex) {
         case 0: self.status.text = @"أغاني مشهورة من iTunes. مقطع 30 ثانية لكل أغنية (فعّل «تكرار الأغنية»)"; break;
         case 1: self.status.text = @"أغاني كاملة من Internet Archive (موسيقى حرة ومرخّصة). المشاهير غالباً مو موجودين هنا"; break;
-        default: self.status.text = @"أغاني كاملة لفنانين مستقلين من Audius"; break;
+        case 2: self.status.text = @"أغاني كاملة لفنانين مستقلين من Audius"; break;
+        default: self.status.text = @"Openverse: موسيقى كاملة مرخّصة (Creative Commons) من مواقع كثيرة. البحث بالإنجليزي أفضل"; break;
     }
 }
 
@@ -424,6 +433,10 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
                           [NSURLQueryItem queryItemWithName:@"sort[]" value:@"downloads desc"],
                           [NSURLQueryItem queryItemWithName:@"rows" value:@"30"],
                           [NSURLQueryItem queryItemWithName:@"output" value:@"json"] ];
+    } else if (source == 3) {
+        c = [NSURLComponents componentsWithString:@"https://api.openverse.org/v1/audio/"];
+        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"q" value:q],
+                          [NSURLQueryItem queryItemWithName:@"page_size" value:@"40"] ];
     } else {
         c = [NSURLComponents componentsWithString:@"https://api.audius.co/v1/tracks/search"];
         c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"query" value:q],
@@ -464,6 +477,24 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
                     if ([ti isKindOfClass:NSArray.class]) ti = [(NSArray *)ti firstObject];
                     [out addObject:@{ @"title": EchoStr(ti).length ? EchoStr(ti) : ident, @"artist": EchoStr(cr),
                                       @"dur": @0, @"archive": ident }];
+                }
+            } else if (source == 3) {
+                id arr = root[@"results"];
+                if ([arr isKindOfClass:NSArray.class]) for (id it in (NSArray *)arr) {
+                    if (![it isKindOfClass:NSDictionary.class]) continue;
+                    NSString *u = EchoStr(it[@"url"]);
+                    if (u.length == 0) continue;
+                    NSString *ft = EchoStr(it[@"filetype"]).lowercaseString;
+                    NSString *ext = nil;
+                    NSString *lu = [[u componentsSeparatedByString:@"?"].firstObject lowercaseString];
+                    for (NSString *e in @[@"mp3", @"m4a", @"wav", @"aac"]) {
+                        if ([ft isEqualToString:e] || [lu hasSuffix:[@"." stringByAppendingString:e]]) { ext = e; break; }
+                    }
+                    if (!ext) continue;                       // ogg وغيره ما يفتح في الآيفون
+                    [out addObject:@{ @"title": EchoStr(it[@"title"]).length ? EchoStr(it[@"title"]) : @"بدون عنوان",
+                                      @"artist": EchoStr(it[@"creator"]),
+                                      @"dur": @(EchoNum(it[@"duration"]) / 1000.0f),
+                                      @"url": u, @"ext": ext }];
                 }
             } else {
                 id arr = root[@"data"];
@@ -883,11 +914,11 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     // ================= تبويب المضخّم =================
     y = 4;
     y = [self addSlider:S_GAIN to:tabAmp y:y];
-    NSArray *quickNames = @[@"عادي", @"×2", @"×3", @"×5", @"×8"];
-    NSArray *quickTags  = @[@100, @200, @300, @500, @800];
-    CGFloat qbw = (w - 8 * 4) / 5.0;
-    for (NSInteger i = 0; i < 5; i++) {
-        CGRect f = CGRectMake(16 + i * (qbw + 8), y + 4, qbw, 32);
+    NSArray *quickNames = @[@"عادي", @"×2", @"×5", @"×8", @"×12", @"×16"];
+    NSArray *quickTags  = @[@100, @200, @500, @800, @1200, @1600];
+    CGFloat qbw = (w - 6 * 5) / 6.0;
+    for (NSInteger i = 0; i < 6; i++) {
+        CGRect f = CGRectMake(16 + i * (qbw + 6), y + 4, qbw, 32);
         [tabAmp addSubview:[self makeButton:quickNames[i] frame:f tag:[quickTags[i] integerValue] action:@selector(gainQuick:)]];
     }
     y += 48;
@@ -920,7 +951,7 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     [tabAmp addSubview:self.monWarn];
     y += 40;
 
-    y = [self addHint:@"تكلّم وشوف الشريط. المضخّم يرفع صوتك لين ×8 مع حد ناعم يمنع التقطع. لو الشريط صار أحمر دايم، خفّض التضخيم.\n«أسمع صوتي» يوصّل لسماعتك نفس صوتك اللي يسمعونه (مع الصدى والنبرة) بتأخير بسيط. يشتغل بس لما المايك شغال في ديسكورد: داخل روم صوتي وغير مكتوم. استخدم سماعات."
+    y = [self addHint:@"تكلّم وشوف الشريط. المضخّم يرفع صوتك لين ×16 مع حد ناعم يمنع التقطع. لو الشريط صار أحمر دايم، خفّض التضخيم.\n«أسمع صوتي» يوصّل لسماعتك نفس صوتك اللي يسمعونه (مع الصدى والنبرة) بتأخير بسيط. يشتغل بس لما المايك شغال في ديسكورد: داخل روم صوتي وغير مكتوم. استخدم سماعات."
                    to:tabAmp y:y height:104];
     tabAmp.contentSize = CGSizeMake(kPanelW, y + 10);
 
@@ -955,7 +986,7 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     [self addToggle:T_SONGECHO to:tabMusic x:16 y:y width:w]; y += 36;
     [self addToggle:T_MONITOR  to:tabMusic x:16 y:y width:w]; y += 40;
     y = [self addSlider:S_MONVOL to:tabMusic y:y];
-    y = [self addHint:@"اللي معك في ديسكورد يسمعون الأغنية من مايكك مع الصدى.\n«أنا أسمع الأغنية» توصّلها لسماعتك أنت. الأفضل تستخدم سماعات، وإلا المايك يلتقطها من السبيكر ويدخل صدى زيادة.\nالبحث: مشاهير (مقاطع 30 ثانية)، كاملة (Internet Archive)، أو Audius."
+    y = [self addHint:@"اللي معك في ديسكورد يسمعون الأغنية من مايكك مع الصدى.\n«أنا أسمع الأغنية» توصّلها لسماعتك أنت. الأفضل تستخدم سماعات، وإلا المايك يلتقطها من السبيكر ويدخل صدى زيادة.\nالبحث: مشاهير (مقاطع 30 ثانية)، Internet Archive، Audius، أو Openverse (كاملة ومرخّصة)."
                    to:tabMusic y:y height:92];
     tabMusic.contentSize = CGSizeMake(kPanelW, y + 10);
 
@@ -1117,7 +1148,11 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         size_t count = 0;
         BOOL truncated = NO;
-        float *buf = EchoDecodeFile(url, &count, &truncated);
+        float *buf = EchoDecodeFile(url, &count, &truncated, ^(float p) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.songLabel.text = [NSString stringWithFormat:@"⏳ فك الأغنية %d%%: %@", (int)(p * 100), name];
+            });
+        });
         if (cleanup) [[NSFileManager defaultManager] removeItemAtURL:url error:nil];   // العينات صارت بالذاكرة
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!buf) {
