@@ -1,14 +1,16 @@
-code_content = r'''// DiscordEchoUI: قائمة عائمة بتصميم Creative EAX Console وأربعة تبويبات (الصدى، النبرة، المضخّم، الأغاني)
+// DiscordEchoUI: قائمة عائمة بأربع تبويبات: الصدى، النبرة، المضخّم، الأغاني
+// زر 🎙 تسحبه في الشاشة، والضغط عليه يفتح القائمة.
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
-#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <math.h>
 #include <stdlib.h>
 
-extern void DiscordEcho_SetEnableEffects(int on);
-extern void DiscordEcho_SetEffectsAmount(int v);
-extern void DiscordEcho_SetPreset(int preset);
+extern void DiscordEcho_SetLevel(int v);
+extern void DiscordEcho_SetEchoBoost(int v);
+extern void DiscordEcho_SetRange(int v);
+extern void DiscordEcho_SetCave(int on);
+extern void DiscordEcho_SetRepeat(int on);
 extern void DiscordEcho_SetGain(int v);
 extern void DiscordEcho_SetPitch(int v);
 extern void DiscordEcho_SetRobot(int on);
@@ -24,15 +26,17 @@ extern int   DiscordEcho_MusicIsPlaying(void);
 extern float DiscordEcho_MusicProgress(void);
 extern float DiscordEcho_MusicDuration(void);
 
-static NSString *const kEffectsKey    = @"DiscordEchoEnableEffects";
-static NSString *const kAmountKey     = @"DiscordEchoEffectsAmount";
-static NSString *const kPresetKey     = @"DiscordEchoPreset";
-static NSString *const kGainKey       = @"DiscordEchoGain";
-static NSString *const kPitchKey      = @"DiscordEchoPitch";
-static NSString *const kRobotKey      = @"DiscordEchoRobot";
-static NSString *const kMusicVolKey   = @"DiscordEchoMusicVol";
-static NSString *const kMusicLoopKey  = @"DiscordEchoMusicLoop";
-static NSString *const kMuteKey       = @"DiscordEchoVoiceMute";
+static NSString *const kLevelKey = @"DiscordEchoLevel";
+static NSString *const kBoostKey = @"DiscordEchoBoost";
+static NSString *const kRangeKey = @"DiscordEchoRange";
+static NSString *const kCaveKey  = @"DiscordEchoCave";
+static NSString *const kRepeatKey = @"DiscordEchoRepeat";
+static NSString *const kGainKey  = @"DiscordEchoGain";
+static NSString *const kPitchKey = @"DiscordEchoPitch";
+static NSString *const kRobotKey = @"DiscordEchoRobot";
+static NSString *const kMusicVolKey = @"DiscordEchoMusicVol";
+static NSString *const kMusicLoopKey = @"DiscordEchoMusicLoop";
+static NSString *const kMuteKey  = @"DiscordEchoVoiceMute";
 
 static const CGFloat kPanelW = 320;
 static const CGFloat kPanelH = 396;
@@ -43,10 +47,10 @@ static int EchoInt(NSString *key, int def) {
     return [d objectForKey:key] ? (int)[d integerForKey:key] : def;
 }
 
-#pragma mark - فك ترميز الأغنية
+#pragma mark - فك ترميز الأغنية إلى عينات أحادية 48kHz
 
 static const double kTargetRate = 48000.0;
-static const size_t kMaxSamples = 48000 * 60 * 8;
+static const size_t kMaxSamples = 48000 * 60 * 8;   // أقصى 8 دقائق
 
 static float *EchoDecodeFile(NSURL *url, size_t *outCount, BOOL *truncated) {
     *outCount = 0;
@@ -104,7 +108,7 @@ static float *EchoDecodeFile(NSURL *url, size_t *outCount, BOOL *truncated) {
         for (AVAudioFrameCount i = 0; i < got && n < cap; i++) {
             float s = 0;
             for (AVAudioChannelCount c = 0; c < chans; c++) s += chData[c][i];
-            out[n++] = s / (float)chans;
+            out[n++] = s / (float)chans;      // دمج القنوات إلى أحادي
         }
         if (got == 0) finished = YES;
     }
@@ -119,7 +123,7 @@ static NSString *EchoTime(float s) {
     return [NSString stringWithFormat:@"%d:%02d", t / 60, t % 60];
 }
 
-#pragma mark - نافذة شفافة
+#pragma mark - نافذة شفافة تمرر اللمس لديسكورد
 
 @interface EchoWindow : UIWindow
 @end
@@ -132,23 +136,29 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - وحدة التحكم
+#pragma mark - الواجهة
 
 @interface EchoController : UIViewController <UIDocumentPickerDelegate>
 @property (nonatomic, strong) UIButton *fab;
 @property (nonatomic, strong) UIView *panel;
 @property (nonatomic, strong) UISegmentedControl *tabs;
 @property (nonatomic, strong) NSArray<UIView *> *tabViews;
-@property (nonatomic, strong) UISwitch *effectsSwitch;
-@property (nonatomic, strong) UISegmentedControl *presetSeg;
-@property (nonatomic, strong) UILabel *amountLabel;
-@property (nonatomic, strong) UISlider *amountSlider;
+// الصدى
+@property (nonatomic, strong) UILabel *echoLabel;
+@property (nonatomic, strong) UILabel *boostLabel;
+@property (nonatomic, strong) UILabel *rangeLabel;
+@property (nonatomic, strong) UISlider *echoSlider;
+@property (nonatomic, strong) UISlider *boostSlider;
+@property (nonatomic, strong) UISlider *rangeSlider;
+// النبرة
 @property (nonatomic, strong) UILabel *pitchLabel;
 @property (nonatomic, strong) UISlider *pitchSlider;
 @property (nonatomic) BOOL robot;
+// المضخّم
 @property (nonatomic, strong) UILabel *gainLabel;
 @property (nonatomic, strong) UISlider *gainSlider;
 @property (nonatomic, strong) UIProgressView *meter;
+// الأغاني
 @property (nonatomic, strong) UILabel *songLabel;
 @property (nonatomic, strong) UILabel *timeLabel;
 @property (nonatomic, strong) UISlider *seekSlider;
@@ -160,6 +170,8 @@ static NSString *EchoTime(float s) {
 @end
 
 @implementation EchoController
+
+#pragma mark - عناصر مساعدة
 
 - (UILabel *)makeLabelAt:(CGRect)frame size:(CGFloat)size bold:(BOOL)bold alpha:(CGFloat)alpha {
     UILabel *l = [[UILabel alloc] initWithFrame:frame];
@@ -193,55 +205,66 @@ static NSString *EchoTime(float s) {
     return s;
 }
 
+- (UISwitch *)addToggleTo:(UIView *)parent title:(NSString *)title x:(CGFloat)x y:(CGFloat)y
+                    width:(CGFloat)wd on:(BOOL)on action:(SEL)a {
+    UILabel *l = [self makeLabelAt:CGRectMake(x, y, wd - 56, 31) size:14 bold:YES alpha:1];
+    l.textAlignment = NSTextAlignmentLeft;
+    l.numberOfLines = 1;
+    l.adjustsFontSizeToFitWidth = YES;
+    l.text = title;
+    [parent addSubview:l];
+    UISwitch *sw = [[UISwitch alloc] init];
+    sw.frame = CGRectMake(x + wd - 51, y, 51, 31);
+    sw.on = on;
+    [sw addTarget:self action:a forControlEvents:UIControlEventValueChanged];
+    [parent addSubview:sw];
+    return sw;
+}
+
+#pragma mark - بناء الواجهة
+
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.clearColor;
 
-    int enableEffects = EchoInt(kEffectsKey, 1);
-    int amount        = EchoInt(kAmountKey, 50);
-    int preset        = EchoInt(kPresetKey, 0);
-    int gain          = EchoInt(kGainKey, 100);
-    int pitch         = EchoInt(kPitchKey, 0);
-    self.robot        = EchoInt(kRobotKey, 0) != 0;
-    int mvol          = EchoInt(kMusicVolKey, 100);
-    int mloop         = EchoInt(kMusicLoopKey, 0);
-    int mute          = EchoInt(kMuteKey, 0);
+    int level = EchoInt(kLevelKey, 50);
+    int boost = EchoInt(kBoostKey, 100);
+    int range = EchoInt(kRangeKey, 60);
+    int cave  = EchoInt(kCaveKey, 1);
+    int rep   = EchoInt(kRepeatKey, 1);
+    int gain  = EchoInt(kGainKey, 100);
+    int pitch = EchoInt(kPitchKey, 0);
+    self.robot = EchoInt(kRobotKey, 0) != 0;
+    int mvol  = EchoInt(kMusicVolKey, 100);
+    int mloop = EchoInt(kMusicLoopKey, 0);
+    int mute  = EchoInt(kMuteKey, 0);
 
+    // الزر العائم
     UIButton *fab = [UIButton buttonWithType:UIButtonTypeCustom];
     fab.frame = CGRectMake(20, 140, 52, 52);
     fab.backgroundColor = [UIColor colorWithWhite:0 alpha:0.65];
     fab.layer.cornerRadius = 26;
     fab.layer.borderWidth = 1;
     fab.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.35].CGColor;
-    [fab setTitle:@"🎛️" forState:UIControlStateNormal];
-    fab.titleLabel.font = [UIFont systemFontOfSize:22];
+    [fab setTitle:@"🎙" forState:UIControlStateNormal];
+    fab.titleLabel.font = [UIFont systemFontOfSize:24];
     [fab addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragFab:)];
     [fab addGestureRecognizer:pan];
     [self.view addSubview:fab];
     self.fab = fab;
 
+    // القائمة
     UIView *panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kPanelW, kPanelH)];
-    panel.backgroundColor = [UIColor colorWithRed:0.12 green:0.14 blue:0.18 alpha:0.96];
+    panel.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.95];
     panel.layer.cornerRadius = 16;
-    panel.layer.borderWidth = 1.2;
-    panel.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.2].CGColor;
     panel.hidden = YES;
     [self.view addSubview:panel];
     self.panel = panel;
 
-    UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    closeBtn.frame = CGRectMake(kPanelW - 38, 12, 26, 26);
-    [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
-    [closeBtn setTitleColor:[UIColor colorWithWhite:1 alpha:0.8] forState:UIControlStateNormal];
-    closeBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
-    closeBtn.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1];
-    closeBtn.layer.cornerRadius = 13;
-    [closeBtn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
-    [panel addSubview:closeBtn];
-
-    UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"EAX صدى", @"النبرة", @"المضخّم", @"🎵 أغاني"]];
-    tabs.frame = CGRectMake(16, 12, kPanelW - 60, 34);
+    // التبويبات
+    UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"الصدى", @"النبرة", @"المضخّم", @"🎵 أغاني"]];
+    tabs.frame = CGRectMake(16, 12, kPanelW - 32, 34);
     tabs.selectedSegmentIndex = 0;
     tabs.selectedSegmentTintColor = [UIColor colorWithWhite:1 alpha:0.28];
     NSDictionary *white = @{ NSForegroundColorAttributeName: UIColor.whiteColor };
@@ -261,116 +284,122 @@ static NSString *EchoTime(float s) {
 
     CGFloat w = kPanelW - 32;
 
-    UILabel *lblSwitch = [self makeLabelAt:CGRectMake(16, 10, w - 60, 28) size:14 bold:YES alpha:1];
-    lblSwitch.textAlignment = NSTextAlignmentLeft;
-    lblSwitch.text = @"Enable Audio Effects";
-    [tabEcho addSubview:lblSwitch];
+    // ================= تبويب الصدى =================
+    [self addToggleTo:tabEcho title:@"كهف 👻" x:16 y:4 width:136 on:cave != 0 action:@selector(caveToggled:)];
+    [self addToggleTo:tabEcho title:@"تكرار 🔁" x:16 + 152 y:4 width:136 on:rep != 0 action:@selector(repeatToggled:)];
 
-    UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(w - 16, 8, 51, 31)];
-    sw.on = (enableEffects != 0);
-    [sw addTarget:self action:@selector(effectsToggled:) forControlEvents:UIControlEventValueChanged];
-    [tabEcho addSubview:sw];
-    self.effectsSwitch = sw;
+    self.echoLabel = [self makeLabelAt:CGRectMake(16, 44, w, 24) size:16 bold:YES alpha:1];
+    [tabEcho addSubview:self.echoLabel];
+    self.echoSlider = [self makeSliderAt:CGRectMake(16, 68, w, 30) min:0 max:100 value:level action:@selector(echoChanged:)];
+    [tabEcho addSubview:self.echoSlider];
 
-    UILabel *lblPreset = [self makeLabelAt:CGRectMake(16, 52, w, 20) size:13 bold:YES alpha:0.8];
-    lblPreset.textAlignment = NSTextAlignmentLeft;
-    lblPreset.text = @"Active Environment (Preset)";
-    [tabEcho addSubview:lblPreset];
+    self.boostLabel = [self makeLabelAt:CGRectMake(16, 104, w, 24) size:16 bold:YES alpha:1];
+    [tabEcho addSubview:self.boostLabel];
+    self.boostSlider = [self makeSliderAt:CGRectMake(16, 128, w, 30) min:100 max:400 value:boost action:@selector(boostChanged:)];
+    [tabEcho addSubview:self.boostSlider];
 
-    UISegmentedControl *presetSeg = [[UISegmentedControl alloc] initWithItems:@[@"Haunted Cavern", @"Cathedral", @"Concert Hall"]];
-    presetSeg.frame = CGRectMake(16, 78, w, 32];
-    presetSeg.selectedSegmentIndex = (preset >= 0 && preset <= 2) ? preset : 0;
-    presetSeg.selectedSegmentTintColor = [UIColor systemIndigoColor];
-    [presetSeg setTitleTextAttributes:white forState:UIControlStateNormal];
-    [presetSeg setTitleTextAttributes:white forState:UIControlStateSelected];
-    [presetSeg addTarget:self action:@selector(presetChanged:) forControlEvents:UIControlEventValueChanged];
-    [tabEcho addSubview:presetSeg];
-    self.presetSeg = presetSeg;
+    self.rangeLabel = [self makeLabelAt:CGRectMake(16, 164, w, 24) size:16 bold:YES alpha:1];
+    [tabEcho addSubview:self.rangeLabel];
+    self.rangeSlider = [self makeSliderAt:CGRectMake(16, 188, w, 30) min:0 max:100 value:range action:@selector(rangeChanged:)];
+    [tabEcho addSubview:self.rangeSlider];
 
-    self.amountLabel = [self makeLabelAt:CGRectMake(16, 130, w, 24) size:14 bold:YES alpha:1];
-    self.amountLabel.textAlignment = NSTextAlignmentLeft;
-    [tabEcho addSubview:self.amountLabel];
+    UILabel *echoHint = [self makeLabelAt:CGRectMake(16, 228, w, 60) size:12 bold:NO alpha:0.55];
+    echoHint.text = @"كهف: ذيل ممتد · تكرار: صوتك يعيد نفسه (الو.. الو.. الو)\nمضخّم الصدى يرفع الصدى بس، والمدى يطوّل التكرار والذيل.\nشغّل واحد منهم على الأقل وإلا ما يطلع صدى.";
+    [tabEcho addSubview:echoHint];
 
-    UISlider *amountSlider = [self makeSliderAt:CGRectMake(16, 160, w, 30) min:0 max:100 value:amount action:@selector(amountChanged:)];
-    [tabEcho addSubview:amountSlider];
-    self.amountSlider = amountSlider;
-
-    UILabel *eaxHint = [self makeLabelAt:CGRectMake(16, 210, w, 70) size:12 bold:NO alpha:0.55];
-    eaxHint.text = @"مطابق لبرنامج Creative EAX Console. اختر بيئة 'Haunted Cavern' للصدى المرعب والعميق، وتحكم بشدة التأثير بدقة.";
-    [tabEcho addSubview:eaxHint];
-
-    self.pitchLabel = [self makeLabelAt:CGRectMake(16, 10, w, 26) size:16 bold:YES alpha:1];
+    // ================= تبويب النبرة =================
+    self.pitchLabel = [self makeLabelAt:CGRectMake(16, 4, w, 26) size:16 bold:YES alpha:1];
     [tabPitch addSubview:self.pitchLabel];
-    self.pitchSlider = [self makeSliderAt:CGRectMake(16, 42, w, 30) min:-12 max:12 value:pitch action:@selector(pitchChanged:)];
+    self.pitchSlider = [self makeSliderAt:CGRectMake(16, 32, w, 30) min:-12 max:12 value:pitch action:@selector(pitchChanged:)];
     [tabPitch addSubview:self.pitchSlider];
 
     NSArray *names = @[@"عادي", @"بنت", @"رجل", @"وحش", @"روبوت", @"🎲 عشوائي"];
     CGFloat pbw = (w - 16) / 3.0;
     for (NSInteger i = 0; i < 6; i++) {
         NSInteger col = i % 3, row = i / 3;
-        CGRect f = CGRectMake(16 + col * (pbw + 8), 90 + row * 44, pbw, 36);
+        CGRect f = CGRectMake(16 + col * (pbw + 8), 76 + row * 42, pbw, 34);
         [tabPitch addSubview:[self makeButton:names[i] frame:f tag:i action:@selector(presetTapped:)]];
     }
+    UILabel *pitchHint = [self makeLabelAt:CGRectMake(16, 164, w, 40) size:12 bold:NO alpha:0.55];
+    pitchHint.text = @"حرّك الشريط أو اختر نمط جاهز.\nروبوت = صوت معدني، وعشوائي = مفاجأة";
+    [tabPitch addSubview:pitchHint];
 
-    self.gainLabel = [self makeLabelAt:CGRectMake(16, 10, w, 26) size:16 bold:YES alpha:1];
+    // ================= تبويب المضخّم =================
+    self.gainLabel = [self makeLabelAt:CGRectMake(16, 4, w, 26) size:16 bold:YES alpha:1];
     [tabAmp addSubview:self.gainLabel];
-    self.gainSlider = [self makeSliderAt:CGRectMake(16, 42, w, 30) min:100 max:800 value:gain action:@selector(gainChanged:)];
+    self.gainSlider = [self makeSliderAt:CGRectMake(16, 32, w, 30) min:100 max:800 value:gain action:@selector(gainChanged:)];
     [tabAmp addSubview:self.gainSlider];
 
     NSArray *quickNames = @[@"عادي", @"×2", @"×3", @"×5", @"×8"];
     NSArray *quickTags  = @[@100, @200, @300, @500, @800];
     CGFloat qbw = (w - 8 * 4) / 5.0;
     for (NSInteger i = 0; i < 5; i++) {
-        CGRect f = CGRectMake(16 + i * (qbw + 8), 86, qbw, 32);
+        CGRect f = CGRectMake(16 + i * (qbw + 8), 72, qbw, 32);
         [tabAmp addSubview:[self makeButton:quickNames[i] frame:f tag:[quickTags[i] integerValue] action:@selector(gainQuick:)]];
     }
 
-    UILabel *meterLabel = [self makeLabelAt:CGRectMake(16, 134, w, 18) size:13 bold:NO alpha:0.7];
-    meterLabel.textAlignment = NSTextAlignmentLeft;
-    meterLabel.text = @"مستوى المايك (Peak Meter)";
+    UILabel *meterLabel = [self makeLabelAt:CGRectMake(16, 116, w, 18) size:13 bold:NO alpha:0.7];
+    meterLabel.text = @"مستوى المايك";
     [tabAmp addSubview:meterLabel];
 
     UIProgressView *meter = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
-    meter.frame = CGRectMake(16, 160, w, 8);
+    meter.frame = CGRectMake(16, 140, w, 8);
     meter.trackTintColor = [UIColor colorWithWhite:1 alpha:0.15];
     meter.progressTintColor = [UIColor systemGreenColor];
     [tabAmp addSubview:meter];
     self.meter = meter;
 
-    self.songLabel = [self makeLabelAt:CGRectMake(16, 10, w, 34) size:13 bold:YES alpha:1];
-    self.songLabel.text = @"ما فيه أغنية. اختر ملف صوتي من ملفات الجهاز";
+    UILabel *ampHint = [self makeLabelAt:CGRectMake(16, 160, w, 60) size:12 bold:NO alpha:0.55];
+    ampHint.text = @"تكلّم وشوف الشريط. المضخّم يرفع صوتك لين ×8 مع حد ناعم يمنع التقطع.\nلو الشريط صار أحمر دايم، خفّض التضخيم.";
+    [tabAmp addSubview:ampHint];
+
+    // ================= تبويب الأغاني =================
+    self.songLabel = [self makeLabelAt:CGRectMake(16, 4, w, 34) size:13 bold:YES alpha:1];
+    self.songLabel.text = @"ما فيه أغنية. اختر ملف صوت من تطبيق الملفات";
     [tabMusic addSubview:self.songLabel];
 
-    [tabMusic addSubview:[self makeButton:@"📂 اختر أغنية" frame:CGRectMake(16, 52, w, 36) tag:0 action:@selector(chooseSong)]];
+    [tabMusic addSubview:[self makeButton:@"📂 اختر أغنية" frame:CGRectMake(16, 42, w, 34) tag:0 action:@selector(chooseSong)]];
 
-    UISlider *seek = [self makeSliderAt:CGRectMake(16, 100, w, 28) min:0 max:1 value:0 action:@selector(seekChanged:)];
+    UISlider *seek = [self makeSliderAt:CGRectMake(16, 84, w, 28) min:0 max:1 value:0 action:@selector(seekChanged:)];
     [seek addTarget:self action:@selector(seekBegan:) forControlEvents:UIControlEventTouchDown];
     [seek addTarget:self action:@selector(seekEnded:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
     [tabMusic addSubview:seek];
     self.seekSlider = seek;
 
-    self.timeLabel = [self makeLabelAt:CGRectMake(16, 132, w, 18) size:12 bold:NO alpha:0.7];
+    self.timeLabel = [self makeLabelAt:CGRectMake(16, 112, w, 18) size:12 bold:NO alpha:0.7];
     self.timeLabel.text = @"0:00 / 0:00";
     [tabMusic addSubview:self.timeLabel];
 
     CGFloat hb = (w - 8) / 2.0;
-    self.playBtn = [self makeButton:@"▶︎ تشغيل" frame:CGRectMake(16, 160, hb, 36) tag:0 action:@selector(playTapped)];
+    self.playBtn = [self makeButton:@"▶︎ تشغيل" frame:CGRectMake(16, 136, hb, 34) tag:0 action:@selector(playTapped)];
     [tabMusic addSubview:self.playBtn];
-    [tabMusic addSubview:[self makeButton:@"⏹ إيقاف" frame:CGRectMake(16 + hb + 8, 160, hb, 36) tag:0 action:@selector(stopTapped)]];
+    [tabMusic addSubview:[self makeButton:@"⏹ إيقاف" frame:CGRectMake(16 + hb + 8, 136, hb, 34) tag:0 action:@selector(stopTapped)]];
 
-    self.volLabel = [self makeLabelAt:CGRectMake(16, 208, w, 24) size:14 bold:YES alpha:1];
-    self.volLabel.textAlignment = NSTextAlignmentLeft;
+    self.volLabel = [self makeLabelAt:CGRectMake(16, 178, w, 24) size:15 bold:YES alpha:1];
     [tabMusic addSubview:self.volLabel];
-    self.volSlider = [self makeSliderAt:CGRectMake(16, 234, w, 30) min:0 max:200 value:mvol action:@selector(volChanged:)];
+    self.volSlider = [self makeSliderAt:CGRectMake(16, 202, w, 30) min:0 max:200 value:mvol action:@selector(volChanged:)];
     [tabMusic addSubview:self.volSlider];
 
-    [self updateAmountLabel:amount];
-    DiscordEcho_SetEnableEffects(enableEffects);
-    DiscordEcho_SetEffectsAmount(amount);
-    DiscordEcho_SetPreset(preset);
+    [self addToggleTo:tabMusic title:@"🔁 تكرار الأغنية" x:16 y:242 width:w on:mloop != 0 action:@selector(loopToggled:)];
+    [self addToggleTo:tabMusic title:@"🔇 كتم صوتي أثناء الأغنية" x:16 y:278 width:w on:mute != 0 action:@selector(muteToggled:)];
+
+    UILabel *musicHint = [self makeLabelAt:CGRectMake(16, 314, w, 20) size:11 bold:NO alpha:0.55];
+    musicHint.text = @"اللي معك في ديسكورد يسمعون الأغنية من مايكك. أنت ما تسمعها.";
+    [tabMusic addSubview:musicHint];
+
+    // تحديث النصوص وتطبيق القيم
+    [self updateEchoLabel:level];
+    [self updateBoostLabel:boost];
+    [self updateRangeLabel:range];
     [self updatePitchLabel];
     [self updateGainLabel:gain];
     [self updateVolLabel:mvol];
+
+    DiscordEcho_SetLevel(level);
+    DiscordEcho_SetEchoBoost(boost);
+    DiscordEcho_SetRange(range);
+    DiscordEcho_SetCave(cave);
+    DiscordEcho_SetRepeat(rep);
     DiscordEcho_SetGain(gain);
     DiscordEcho_SetPitch(pitch);
     DiscordEcho_SetRobot(self.robot ? 1 : 0);
@@ -379,8 +408,16 @@ static NSString *EchoTime(float s) {
     DiscordEcho_SetVoiceMute(mute);
 }
 
-- (void)updateAmountLabel:(int)v {
-    self.amountLabel.text = [NSString stringWithFormat:@"Effects Amount : %d", v];
+#pragma mark - تحديث النصوص
+
+- (void)updateEchoLabel:(int)v {
+    self.echoLabel.text = (v == 0) ? @"الصدى: متوقف" : [NSString stringWithFormat:@"شدة الصدى: %d", v];
+}
+- (void)updateBoostLabel:(int)v {
+    self.boostLabel.text = [NSString stringWithFormat:@"مضخّم الصدى: %d%%", v];
+}
+- (void)updateRangeLabel:(int)v {
+    self.rangeLabel.text = [NSString stringWithFormat:@"مدى الصدى: %d", v];
 }
 - (void)updatePitchLabel {
     int st = (int)lroundf(self.pitchSlider.value);
@@ -395,30 +432,35 @@ static NSString *EchoTime(float s) {
     self.volLabel.text = [NSString stringWithFormat:@"مستوى الأغنية: %d%%", v];
 }
 
+#pragma mark - الأحداث
+
 - (void)tabChanged:(UISegmentedControl *)sender {
     for (NSUInteger i = 0; i < self.tabViews.count; i++)
-    self.tabViews[i].hidden = ((NSInteger)i != sender.selectedSegmentIndex);
+        self.tabViews[i].hidden = ((NSInteger)i != sender.selectedSegmentIndex);
 }
 
 - (void)saveInt:(int)v key:(NSString *)k {
     [[NSUserDefaults standardUserDefaults] setInteger:v forKey:k];
 }
 
-- (void)effectsToggled:(UISwitch *)s {
-    DiscordEcho_SetEnableEffects(s.on ? 1 : 0);
-    [self saveInt:s.on ? 1 : 0 key:kEffectsKey];
-}
-- (void)presetChanged:(UISegmentedControl *)s {
-    DiscordEcho_SetPreset((int)s.selectedSegmentIndex);
-    [self saveInt:(int)s.selectedSegmentIndex key:kPresetKey];
-}
-- (void)amountChanged:(UISlider *)s {
+// ----- الصدى -----
+- (void)caveToggled:(UISwitch *)s { DiscordEcho_SetCave(s.on ? 1 : 0); [self saveInt:s.on key:kCaveKey]; }
+- (void)repeatToggled:(UISwitch *)s { DiscordEcho_SetRepeat(s.on ? 1 : 0); [self saveInt:s.on key:kRepeatKey]; }
+
+- (void)echoChanged:(UISlider *)s {
     int v = (int)lroundf(s.value);
-    DiscordEcho_SetEffectsAmount(v);
-    [self saveInt:v key:kAmountKey];
-    [self updateAmountLabel:v];
+    DiscordEcho_SetLevel(v); [self saveInt:v key:kLevelKey]; [self updateEchoLabel:v];
+}
+- (void)boostChanged:(UISlider *)s {
+    int v = (int)lroundf(s.value);
+    DiscordEcho_SetEchoBoost(v); [self saveInt:v key:kBoostKey]; [self updateBoostLabel:v];
+}
+- (void)rangeChanged:(UISlider *)s {
+    int v = (int)lroundf(s.value);
+    DiscordEcho_SetRange(v); [self saveInt:v key:kRangeKey]; [self updateRangeLabel:v];
 }
 
+// ----- النبرة -----
 - (void)applyPitch:(int)st robot:(BOOL)robot {
     if (st < -12) st = -12;
     if (st > 12) st = 12;
@@ -433,18 +475,19 @@ static NSString *EchoTime(float s) {
 - (void)pitchChanged:(UISlider *)s { [self applyPitch:(int)lroundf(s.value) robot:self.robot]; }
 - (void)presetTapped:(UIButton *)b {
     switch (b.tag) {
-        case 0: [self applyPitch:0  robot:NO];  break;
-        case 1: [self applyPitch:5  robot:NO];  break;
-        case 2: [self applyPitch:-4 robot:NO];  break;
-        case 3: [self applyPitch:-9 robot:NO];  break;
-        case 4: [self applyPitch:0  robot:YES]; break;
-        default: {
+        case 0: [self applyPitch:0  robot:NO];  break;   // عادي
+        case 1: [self applyPitch:5  robot:NO];  break;   // بنت
+        case 2: [self applyPitch:-4 robot:NO];  break;   // رجل
+        case 3: [self applyPitch:-9 robot:NO];  break;   // وحش
+        case 4: [self applyPitch:0  robot:YES]; break;   // روبوت
+        default: {                                         // عشوائي
             int st = (int)arc4random_uniform(21) - 10;
             [self applyPitch:st robot:(arc4random_uniform(4) == 0)];
         }
     }
 }
 
+// ----- المضخّم -----
 - (void)gainChanged:(UISlider *)s {
     int v = (int)lroundf(s.value);
     DiscordEcho_SetGain(v); [self saveInt:v key:kGainKey]; [self updateGainLabel:v];
@@ -454,9 +497,11 @@ static NSString *EchoTime(float s) {
     [self gainChanged:self.gainSlider];
 }
 
+// ----- الأغاني -----
 - (void)chooseSong {
     UIDocumentPickerViewController *p =
-    [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeAudio] asCopy:YES];
+        [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.audio"]
+                                                               inMode:UIDocumentPickerModeImport];
     p.delegate = self;
     p.allowsMultipleSelection = NO;
     [self presentViewController:p animated:YES completion:nil];
@@ -477,12 +522,12 @@ static NSString *EchoTime(float s) {
         float *buf = EchoDecodeFile(url, &count, &truncated);
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!buf) {
-                self.songLabel.text = @"❌ تعذر قراءة الملف. جرّب mp3 أو wav";
+                self.songLabel.text = @"❌ ما قدرت أقرأ الملف. جرّب mp3 أو m4a أو wav";
                 return;
             }
             DiscordEcho_MusicLoad(buf, count);
             NSString *t = [NSString stringWithFormat:@"🎵 %@", name];
-            if (truncated) t = [t stringByAppendingString:@" (أول 8 دقائق)"];
+            if (truncated) t = [t stringByAppendingString:@" (أول 8 دقايق بس)"];
             self.songLabel.text = t;
             [self refreshMusicUI];
         });
@@ -519,6 +564,10 @@ static NSString *EchoTime(float s) {
     int v = (int)lroundf(s.value);
     DiscordEcho_MusicSetVolume(v); [self saveInt:v key:kMusicVolKey]; [self updateVolLabel:v];
 }
+- (void)loopToggled:(UISwitch *)s { DiscordEcho_MusicSetLoop(s.on ? 1 : 0); [self saveInt:s.on key:kMusicLoopKey]; }
+- (void)muteToggled:(UISwitch *)s { DiscordEcho_SetVoiceMute(s.on ? 1 : 0); [self saveInt:s.on key:kMuteKey]; }
+
+#pragma mark - مؤقت (مقياس المايك + تقدّم الأغنية)
 
 - (void)startTimer {
     if (self.timer) return;
@@ -532,8 +581,8 @@ static NSString *EchoTime(float s) {
             if (pk > 1.0f) pk = 1.0f;
             s.meter.progress = pk;
             s.meter.progressTintColor = (pk > 0.98f) ? [UIColor systemRedColor]
-            : (pk > 0.8f)  ? [UIColor systemOrangeColor]
-            : [UIColor systemGreenColor];
+                                      : (pk > 0.8f)  ? [UIColor systemOrangeColor]
+                                                     : [UIColor systemGreenColor];
         } else if (tab == 3) {
             [s refreshMusicUI];
         }
@@ -544,6 +593,8 @@ static NSString *EchoTime(float s) {
     [self.timer invalidate];
     self.timer = nil;
 }
+
+#pragma mark - تحريك القائمة
 
 - (void)togglePanel {
     self.panel.hidden = !self.panel.hidden;
@@ -592,6 +643,8 @@ static NSString *EchoTime(float s) {
 
 @end
 
+#pragma mark - تشغيل النافذة فوق ديسكورد
+
 static EchoWindow *gWin;
 
 static void echo_setup_window(void) {
@@ -606,9 +659,29 @@ static void echo_setup_window(void) {
     }
     if (!scene) return;
     gWin = [[EchoWindow alloc] initWithWindowScene:scene];
+    gWin.windowLevel = UIWindowLevelAlert + 100;
+    gWin.backgroundColor = UIColor.clearColor;
+    gWin.rootViewController = [EchoController new];
+    gWin.hidden = NO;
 }
-'''
 
-with open("DiscordEchoUI.m", "w", encoding="utf-8") as f:
-    f.write(code_content)
-print("File created successfully.")
+__attribute__((constructor))
+static void echo_ui_init(void) {
+    DiscordEcho_SetLevel(EchoInt(kLevelKey, 50));
+    DiscordEcho_SetEchoBoost(EchoInt(kBoostKey, 100));
+    DiscordEcho_SetRange(EchoInt(kRangeKey, 60));
+    DiscordEcho_SetCave(EchoInt(kCaveKey, 1));
+    DiscordEcho_SetRepeat(EchoInt(kRepeatKey, 1));
+    DiscordEcho_SetGain(EchoInt(kGainKey, 100));
+    DiscordEcho_SetPitch(EchoInt(kPitchKey, 0));
+    DiscordEcho_SetRobot(EchoInt(kRobotKey, 0));
+    DiscordEcho_MusicSetVolume(EchoInt(kMusicVolKey, 100));
+    DiscordEcho_MusicSetLoop(EchoInt(kMusicLoopKey, 0));
+    DiscordEcho_SetVoiceMute(EchoInt(kMuteKey, 0));
+
+    [[NSNotificationCenter defaultCenter]
+        addObserverForName:UIApplicationDidBecomeActiveNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *n) { echo_setup_window(); }];
+}
