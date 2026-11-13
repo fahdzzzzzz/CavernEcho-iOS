@@ -1,4 +1,4 @@
-// DiscordEchoUI: متصفح يوتيوب مع زر تحميل وتحويل مباشر إلى MP3 وإضافته للأداة
+// DiscordEchoUI: متصفح يوتيوب + زر تحميل + خيار اختيار ملف MP3 من الجهاز مباشرة
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -180,7 +180,7 @@ static const ToggleSpec kToggles[T_COUNT] = {
     [T_CAVE]     = { @"كهف 👻",                    @"DiscordEchoCave",     1, DiscordEcho_SetCave },
     [T_REPEAT]   = { @"تكرار 🔁",                  @"DiscordEchoRepeat",   1, DiscordEcho_SetRepeat },
     [T_LOOP]     = { @"🔁 تكرار الأغنية",          @"DiscordEchoMusicLoop", 0, DiscordEcho_MusicSetLoop },
-    [T_MUTE]     = { @"🔇 كتم صوتي أثناء الأغنية", @"DiscordEchoVoiceMute", 0, DiscordEcho_SetVoiceMute },
+    [T_MUTE]     = { @"🔇 كتم صوتي أثناء الأغنية", @"DiscordEchoVoiceMute", 0, DiscordEcho_VoiceMute },
     [T_SONGECHO] = { @"👻 الصدى على الأغنية",      @"DiscordEchoSongEcho", 1, DiscordEcho_SetSongEcho },
     [T_MONITOR]  = { @"🎧 أنا أسمع الأغنية",       @"DiscordEchoMonitor",  0, echo_set_monitor },
     [T_SELFMON]  = { @"🎧 أسمع صوتي (مع الصدى)",   @"DiscordEchoSelfMon",  0, echo_set_selfmon },
@@ -283,7 +283,7 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - متصفح يوتيوب مع زر التحويل المباشر إلى MP3
+#pragma mark - متصفح يوتيوب مع زر التحميل والتحويل المباشر
 
 @interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
@@ -360,7 +360,7 @@ static NSString *EchoTime(float s) {
     self.status.font = [UIFont systemFontOfSize:12];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
     self.status.numberOfLines = 2;
-    self.status.text = @"افتح الفيديو واضغط زر (تحميل MP3) بالاعلى لنقله للأداة.";
+    self.status.text = @"ادخل الفيديو واضغط (تحميل MP3) بالاعلى.";
     [self.view addSubview:self.status];
 
     [self openTabWithConfig:nil];
@@ -477,16 +477,13 @@ static NSString *EchoTime(float s) {
     return YES;
 }
 
-// عند الضغط على زر تحميل MP3 اليدوي
 - (void)downloadTapped {
     NSURL *currentURL = self.web.URL;
     if (!currentURL) {
         self.status.text = @"❌ لا يوجد رابط مفتوح حالياً.";
         return;
     }
-    
     NSString *urlString = currentURL.absoluteString;
-    // نسخ الرابط للحافظة للاحتياط
     UIPasteboard.generalPasteboard.string = urlString;
     
     if (![urlString containsString:@"youtube.com"] && ![urlString containsString:@"youtu.be"]) {
@@ -498,8 +495,7 @@ static NSString *EchoTime(float s) {
     [self convertAndDownloadURL:urlString];
 }
 
-- (void)convertAndDownloadURL:(NSString *)ytUrl {
-    // استخدام عدة سيرفرات API لتحويل الفيديو وتحميله
+- (void)convertAndDownloadURL:(NSString * )ytUrl {
     NSArray *servers = @[
         @"https://pipedapi.kavin.rocks",
         @"https://pipedapi.privacy.com.de"
@@ -510,7 +506,7 @@ static NSString *EchoTime(float s) {
 - (void)tryServerList:(NSArray *)servers index:(NSInteger)idx url:(NSString *)ytUrl {
     if (idx >= (NSInteger)servers.count) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.status.text = @"❌ فشل التحويل، تأكد أنك داخل صفحة فيديو يوتيوب.";
+            self.status.text = @"❌ تعذر التحويل، استخدم زر (اختيار ملف MP3) أدناه مباشرة.";
         });
         return;
     }
@@ -525,7 +521,7 @@ static NSString *EchoTime(float s) {
     }
     
     if (!videoId || videoId.length == 0) {
-        self.status.text = @"❌ يرجى الدخول إلى صفحة فيديو محدد.";
+        self.status.text = @"❌ يرجى الدخول لصفحة فيديو محدد.";
         return;
     }
     
@@ -593,7 +589,7 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - الواجهة الرئيسية الكاملة
+#pragma mark - الواجهة الرئيسية مع زر اختيار ملف MP3 من الجهاز
 
 @interface EchoController : UIViewController <UIDocumentPickerDelegate> {
     UISlider *_sl[S_COUNT];
@@ -882,29 +878,34 @@ static NSString *EchoTime(float s) {
     y += 40;
     tabAmp.contentSize = CGSizeMake(kPanelW, y + 10);
 
-    // 5. تبويب الأغاني والمتصفح
+    // 5. تبويب الأغاني والمتصفح + زر اختيار ملف من الجهاز
     self.songLabel = [self makeLabelAt:CGRectMake(16, 4, w, 34) size:13 bold:YES alpha:1];
-    self.songLabel.text = @"لم يتم اختيار أغنية. افتح متصفح يوتيوب واضغط تحميل MP3.";
+    self.songLabel.text = @"لم يتم اختيار أغنية.";
     [tabMusic addSubview:self.songLabel];
 
-    [tabMusic addSubview:[self makeButton:@"🌐 فتح متصفح يوتيوب" frame:CGRectMake(16, 44, w, 38) tag:0 action:@selector(browseSong)]];
+    CGFloat btnW = (w - 8) / 2.0;
+    [tabMusic addSubview:[self makeButton:@"🌐 تصفح يوتيوب" frame:CGRectMake(16, 44, btnW, 38) tag:0 action:@selector(browseSong)]];
+    
+    UIButton *pickFileBtn = [self makeButton:@"📁 اختر ملف MP3" frame:CGRectMake(16 + btnW + 8, 44, btnW, 38) tag:0 action:@selector(pickAudioFile)];
+    pickFileBtn.backgroundColor = [UIColor systemIndigoColor];
+    [tabMusic addSubview:pickFileBtn];
 
-    UISlider *seek = [self makeSliderAt:CGRectMake(16, 90, w, 28) min:0 max:1 value:0 action:@selector(seekChanged:)];
+    UISlider *seek = [self makeSliderAt:CGRectMake(16, 92, w, 28) min:0 max:1 value:0 action:@selector(seekChanged:)];
     [seek addTarget:self action:@selector(seekBegan:) forControlEvents:UIControlEventTouchDown];
     [seek addTarget:self action:@selector(seekEnded:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
     [tabMusic addSubview:seek];
     self.seekSlider = seek;
 
-    self.timeLabel = [self makeLabelAt:CGRectMake(16, 120, w, 18) size:12 bold:NO alpha:0.7];
+    self.timeLabel = [self makeLabelAt:CGRectMake(16, 122, w, 18) size:12 bold:NO alpha:0.7];
     self.timeLabel.text = @"0:00 / 0:00";
     [tabMusic addSubview:self.timeLabel];
 
     CGFloat hb = (w - 8) / 2.0;
-    self.playBtn = [self makeButton:@"▶︎ تشغيل" frame:CGRectMake(16, 144, hb, 36) tag:0 action:@selector(playTapped)];
+    self.playBtn = [self makeButton:@"▶︎ تشغيل" frame:CGRectMake(16, 148, hb, 36) tag:0 action:@selector(playTapped)];
     [tabMusic addSubview:self.playBtn];
-    [tabMusic addSubview:[self makeButton:@"⏹ إيقاف" frame:CGRectMake(16 + hb + 8, 144, hb, 36) tag:0 action:@selector(stopTapped)]];
+    [tabMusic addSubview:[self makeButton:@"⏹ إيقاف" frame:CGRectMake(16 + hb + 8, 148, hb, 36) tag:0 action:@selector(stopTapped)]];
 
-    y = 192;
+    y = 196;
     y = [self addSlider:S_MUSVOL to:tabMusic y:y];
     [self addToggle:T_LOOP     to:tabMusic x:16 y:y width:w]; y += 36;
     [self addToggle:T_MUTE     to:tabMusic x:16 y:y width:w]; y += 36;
@@ -1042,17 +1043,32 @@ static NSString *EchoTime(float s) {
     [self presentViewController:vc animated:YES completion:nil];
 }
 
+// زر اختيار ملف MP3 مباشرة من جوالك (مضمون 100%)
+- (void)pickAudioFile {
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeAudio, UTTypeMP3, UTTypeMPEG4Audio] asCopy:YES];
+    picker.delegate = self;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    NSURL *url = urls.firstObject;
+    if (!url) return;
+    [url startAccessingSecurityScopedResource];
+    NSString *name = url.lastPathComponent;
+    [self loadSongAtURL:url name:name];
+    [url stopAccessingSecurityScopedResource];
+}
+
 - (void)loadSongAtURL:(NSURL *)url name:(NSString *)name {
     DiscordEcho_MusicPlay(0);
-    self.songLabel.text = [NSString stringWithFormat:@"⏳ جاري تحميل: %@", name];
+    self.songLabel.text = [NSString stringWithFormat:@"⏳ جاري معالجة: %@", name];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         size_t count = 0;
         BOOL truncated = NO;
         float *buf = EchoDecodeFile(url, &count, &truncated, nil);
-        [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!buf) {
-                self.songLabel.text = @"❌ فشل تحميل الملف الصوتي";
+                self.songLabel.text = @"❌ فشل قراءة الملف الصوتي";
                 return;
             }
             DiscordEcho_MusicLoad(buf, count);
