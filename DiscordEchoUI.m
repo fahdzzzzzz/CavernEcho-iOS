@@ -1,4 +1,4 @@
-// DiscordEchoUI: قائمة عائمة + متصفح يوتيوب مباشر يلقط الصوت ويدمجه بالمايك ليديسكورد
+// DiscordEchoUI: القائمة الكاملة (الصدى، الموازن، النبرة، المايك، متصفح يوتيوب المباشر)
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -65,6 +65,8 @@ static int EchoInt(NSString *key, int def) {
     return [d objectForKey:key] ? (int)[d integerForKey:key] : def;
 }
 
+#pragma mark - جداول الإعدادات
+
 typedef struct {
     NSString *title;
     NSString *unit;
@@ -114,16 +116,15 @@ typedef struct {
 
 enum { T_CAVE, T_REPEAT, T_LOOP, T_MUTE, T_SONGECHO, T_MONITOR, T_SELFMON, T_COUNT };
 
+#pragma mark - مراقبة الصوت
+
 static AVAudioEngine *gMonEngine;
 static int gMonSong, gMonSelf;
 static int echo_mon_wanted(void) { return gMonSong || gMonSelf; }
 static BOOL gAppReady;
 
 static void echo_monitor_stop(void) {
-    if (gMonEngine) {
-        [gMonEngine stop];
-        gMonEngine = nil;
-    }
+    if (gMonEngine) { [gMonEngine stop]; gMonEngine = nil; }
 }
 
 static void echo_monitor_start(void) {
@@ -204,7 +205,7 @@ static const int kEqPresets[5][5] = {
     { 400, 3500,   0, 100,  90 },
 };
 
-#pragma mark - فك ترميز الأغنية إلى عينات أحادية 48kHz
+#pragma mark - فك ترميز الصوت
 
 static const double kTargetRate = 48000.0;
 static const size_t kMaxSamples = 48000 * 60 * 8;
@@ -235,7 +236,6 @@ static float *EchoDecodeFile(NSURL *url, size_t *outCount, BOOL *truncated, void
     const AVAudioFrameCount chunk = 32768;
     AVAudioPCMBuffer *outBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:dst frameCapacity:chunk];
     BOOL finished = NO;
-    NSTimeInterval lastProg = 0;
     while (!finished && n < cap) {
         NSError *cerr = nil;
         AVAudioConverterOutputStatus st = [conv convertToBuffer:outBuf
@@ -258,8 +258,7 @@ static float *EchoDecodeFile(NSURL *url, size_t *outCount, BOOL *truncated, void
             return inBuf;
         }];
         if (st == AVAudioConverterOutputStatus_Error) break;
-        if (st == AVAudioConverterOutputStatus_EndOfStream ||
-            st == AVAudioConverterOutputStatus_InputRanDry) finished = YES;
+        if (st == AVAudioConverterOutputStatus_EndOfStream || st == AVAudioConverterOutputStatus_InputRanDry) finished = YES;
 
         AVAudioFrameCount got = outBuf.frameLength;
         float *const *chData = outBuf.floatChannelData;
@@ -269,13 +268,6 @@ static float *EchoDecodeFile(NSURL *url, size_t *outCount, BOOL *truncated, void
             out[n++] = s / (float)chans;
         }
         if (got == 0) finished = YES;
-        if (progress && file.length > 0) {
-            NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-            if (now - lastProg > 0.25) {
-                lastProg = now;
-                progress((float)((double)file.framePosition / (double)file.length));
-            }
-        }
     }
     if (!finished && n >= cap && cap == kMaxSamples) *truncated = YES;
     if (n < 2) { free(out); return NULL; }
@@ -301,7 +293,7 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - متصفح اليوتيوب المباشر (يكتشف الفيديو ويحوله للأداة)
+#pragma mark - متصفح يوتيوب المباشر داخل الأداة
 
 @interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
@@ -313,7 +305,6 @@ static NSString *EchoTime(float s) {
 @property (nonatomic, strong) UIButton *backBtn;
 @property (nonatomic, strong) NSArray *quick;
 @property (nonatomic, strong) UILabel *status;
-@property (nonatomic, strong) NSMutableDictionary *dests;
 @end
 
 @implementation EchoBrowserController
@@ -336,7 +327,6 @@ static NSString *EchoTime(float s) {
     [super viewDidLoad];
     self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     self.view.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1];
-    self.dests = [NSMutableDictionary dictionary];
     self.tabs = [NSMutableArray array];
     self.cur = -1;
 
@@ -350,7 +340,7 @@ static NSString *EchoTime(float s) {
     self.addr.textColor = UIColor.whiteColor;
     self.addr.layer.cornerRadius = 9;
     self.addr.font = [UIFont systemFontOfSize:14];
-    self.addr.placeholder = @"ابحث في يوتيوب أو الصق الرابط هنا";
+    self.addr.placeholder = @"ابحث في يوتيوب أو الصق الرابط";
     self.addr.keyboardType = UIKeyboardTypeURL;
     self.addr.autocapitalizationType = UITextAutocapitalizationTypeNone;
     self.addr.autocorrectionType = UITextAutocorrectionTypeNo;
@@ -379,7 +369,7 @@ static NSString *EchoTime(float s) {
     self.status.font = [UIFont systemFontOfSize:12];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
     self.status.numberOfLines = 2;
-    self.status.text = @"اضغط أي فيديو في يوتيوب، وبجيبه لك للأداة تلقائياً.";
+    self.status.text = @"اضغط على أي فيديو في يوتيوب وسيتم تشغيله للأداة فوراً.";
     [self.view addSubview:self.status];
 
     [self openTabWithConfig:nil];
@@ -444,7 +434,6 @@ static NSString *EchoTime(float s) {
     UIButton *del = [self pill:@"🗑 إغلاق" action:@selector(closeTabTapped) tag:0];
     del.frame = CGRectMake(x, 0, 78, 32);
     [self.tabBar addSubview:del];
-    x += 84;
     self.tabBar.contentSize = CGSizeMake(x + 8, 34);
 }
 
@@ -496,12 +485,11 @@ static NSString *EchoTime(float s) {
     return YES;
 }
 
-// اعتراض روابط يوتيوب وسحب الصوت تلقائياً عند دخول الفيديو
+// التقاط ضغطة الفيديو وتشغيله تلقائياً في الأداة
 - (void)webView:(WKWebView *)wv decidePolicyForNavigationAction:(WKNavigationAction *)a decisionHandler:(void (^)(WKNavigationActionPolicy))h {
     NSURL *url = a.request.URL;
     NSString *urlString = url.absoluteString;
     
-    // إذا دخل المستخدم على فيديو في يوتيوب
     if ([urlString containsString:@"youtube.com/watch?v="] || [urlString containsString:@"youtu.be/"]) {
         NSString *videoId = nil;
         if ([urlString containsString:@"youtu.be/"]) {
@@ -513,9 +501,9 @@ static NSString *EchoTime(float s) {
         }
         
         if (videoId && videoId.length > 0) {
-            self.status.text = @"⏳ جاري جلب الصوت من يوتيوب وتشغيله…";
+            self.status.text = @"⏳ جاري استخراج الصوت من الفيديو…";
             [self fetchAndPlayYouTubeVideo:videoId];
-            h(WKNavigationActionPolicyCancel); // نمنع فتح صفحة الفيديو الثقيلة ونشغل الصوت مباشرة للأداة
+            h(WKNavigationActionPolicyCancel);
             return;
         }
     }
@@ -540,9 +528,8 @@ static NSString *EchoTime(float s) {
         }
         
         if (!streamUrl) {
-            // سيرفر بديل للاستخراج
             dispatch_async(dispatch_get_main_queue(), ^{
-                ws.status.text = @"❌ تعذر استخراج الصوت من هذا الفيديو، جرب غيره.";
+                ws.status.text = @"❌ تعذر استخراج الصوت، جرب فيديو آخر.";
             });
             return;
         }
@@ -556,7 +543,7 @@ static NSString *EchoTime(float s) {
             [[NSFileManager defaultManager] removeItemAtURL:dest error:nil];
             if ([[NSFileManager defaultManager] moveItemAtURL:loc toURL:dest error:nil]) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    ws.status.text = [NSString stringWithFormat:@"✅ شغال الآن: %@", title];
+                    ws.status.text = [NSString stringWithFormat:@"✅ تم التشغيل: %@", title];
                     void (^cb)(NSURL *, NSString *) = ws.onPick;
                     [ws dismissViewControllerAnimated:YES completion:^{ if (cb) cb(dest, title); }];
                 });
@@ -573,59 +560,7 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - محرك البحث الاحتياطي
-
-@interface EchoSearchController : UIViewController <UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate>
-@property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
-@property (nonatomic, strong) UISearchBar *bar;
-@property (nonatomic, strong) UISegmentedControl *src;
-@property (nonatomic, strong) UITableView *table;
-@property (nonatomic, strong) UILabel *status;
-@property (nonatomic, strong) UIButton *closeBtn;
-@property (nonatomic, strong) NSArray *items;
-@property (nonatomic, strong) NSURLSessionTask *task;
-@end
-
-@implementation EchoSearchController
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
-    self.view.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1];
-    self.closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.closeBtn setTitle:@"✕ إغلاق" forState:UIControlStateNormal];
-    [self.closeBtn addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:self.closeBtn];
-    self.src = [[UISegmentedControl alloc] initWithItems:@[@"🎵 مشاهير", @"🆓 Archive", @"Audius", @"📺 يوتيوب"]];
-    self.src.selectedSegmentIndex = 3;
-    self.src.selectedSegmentTintColor = [UIColor colorWithWhite:1 alpha:0.28];
-    [self.view addSubview:self.src];
-    self.bar = [[UISearchBar alloc] init];
-    self.bar.placeholder = @"🔍 ابحث باسم الأغنية";
-    self.bar.delegate = self;
-    [self.view addSubview:self.bar];
-    self.status = [[UILabel alloc] init];
-    self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
-    [self.view addSubview:self.status];
-    self.table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
-    self.table.dataSource = self;
-    self.table.delegate = self;
-    [self.view addSubview:self.table];
-}
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
-    CGRect b = self.view.bounds;
-    self.closeBtn.frame = CGRectMake(b.size.width - 96, 10, 84, 34);
-    self.src.frame = CGRectMake(16, 48, b.size.width - 32, 32);
-    self.bar.frame = CGRectMake(8, 84, b.size.width - 16, 50);
-    self.status.frame = CGRectMake(16, 136, b.size.width - 32, 38);
-    self.table.frame = CGRectMake(0, 178, b.size.width, b.size.height - 178);
-}
-- (void)closeTapped { [self dismissViewControllerAnimated:YES completion:nil]; }
-- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)section { return 0; }
-- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip { return [UITableViewCell new]; }
-@end
-
-#pragma mark - الواجهة الرئيسية للأداة
+#pragma mark - الواجهة الرئيسية (جميع التبويبات الخمسة كاملة)
 
 @interface EchoController : UIViewController <UIDocumentPickerDelegate> {
     UISlider *_sl[S_COUNT];
@@ -644,6 +579,8 @@ static NSString *EchoTime(float s) {
 @property (nonatomic, strong) UIProgressView *meter;
 @property (nonatomic, strong) UILabel *micStatus;
 @property (nonatomic, strong) UILabel *monWarn;
+@property (nonatomic) unsigned lastRender;
+@property (nonatomic) CFTimeInterval lastRenderTime;
 @property (nonatomic, strong) UILabel *songLabel;
 @property (nonatomic, strong) UILabel *timeLabel;
 @property (nonatomic, strong) UISlider *seekSlider;
@@ -659,6 +596,7 @@ static NSString *EchoTime(float s) {
     l.textAlignment = NSTextAlignmentCenter;
     l.textColor = [UIColor colorWithWhite:1 alpha:alpha];
     l.font = bold ? [UIFont boldSystemFontOfSize:size] : [UIFont systemFontOfSize:size];
+    l.numberOfLines = 0;
     return l;
 }
 
@@ -701,6 +639,7 @@ static NSString *EchoTime(float s) {
 - (UIScrollView *)makeTab {
     UIScrollView *sv = [[UIScrollView alloc] initWithFrame:CGRectMake(0, kTabTop, kPanelW, kPanelH - kTabTop)];
     sv.alwaysBounceVertical = YES;
+    sv.showsHorizontalScrollIndicator = NO;
     return sv;
 }
 
@@ -710,6 +649,13 @@ static NSString *EchoTime(float s) {
     l.text = text;
     [parent addSubview:l];
     return y + 26;
+}
+
+- (CGFloat)addHint:(NSString *)text to:(UIView *)parent y:(CGFloat)y height:(CGFloat)h {
+    UILabel *l = [self makeLabelAt:CGRectMake(16, y, kPanelW - 32, h) size:12 bold:NO alpha:0.55];
+    l.text = text;
+    [parent addSubview:l];
+    return y + h + 6;
 }
 
 - (CGFloat)addSlider:(int)idx to:(UIView *)parent y:(CGFloat)y {
@@ -756,6 +702,8 @@ static NSString *EchoTime(float s) {
     [fab setTitle:@"🎙" forState:UIControlStateNormal];
     fab.titleLabel.font = [UIFont systemFontOfSize:24];
     [fab addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragFab:)];
+    [fab addGestureRecognizer:pan];
     [self.view addSubview:fab];
     self.fab = fab;
 
@@ -769,7 +717,7 @@ static NSString *EchoTime(float s) {
 
     UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"الصدى", @"الموازن", @"النبرة", @"المايك", @"🎵"]];
     tabs.frame = CGRectMake(16, 12, kPanelW - 32, 34);
-    tabs.selectedSegmentIndex = 4; // نبدأ بتبويب الأغاني مباشرة لسرعة التشغيل
+    tabs.selectedSegmentIndex = 0;
     tabs.selectedSegmentTintColor = [UIColor colorWithWhite:1 alpha:0.28];
     [tabs addTarget:self action:@selector(tabChanged:) forControlEvents:UIControlEventValueChanged];
     [panel addSubview:tabs];
@@ -781,36 +729,149 @@ static NSString *EchoTime(float s) {
     UIScrollView *tabAmp   = [self makeTab];
     UIScrollView *tabMusic = [self makeTab];
     self.tabViews = @[tabEcho, tabEq, tabPitch, tabAmp, tabMusic];
-    for (UIView *v in (NSArray *)self.tabViews) { [panel addSubview:v]; v.hidden = (v != tabMusic); }
+    for (UIView *v in (NSArray *)self.tabViews) { [panel addSubview:v]; v.hidden = (v != tabEcho); }
 
-    // تبويب الأغاني
+    // 1. تبويب الصدى
     CGFloat y = 4;
-    self.songLabel = [self makeLabelAt:CGRectMake(16, y, w, 34) size:13 bold:YES alpha:1];
-    self.songLabel.text = @"اختر مقطعاً من متصفح يوتيوب لتشغيله للشباب";
-    [tabMusic addSubview:self.songLabel];
+    y = [self addHeader:@"نوع الصدى" to:tabEcho y:y];
+    NSArray *modeNames = @[@"👻 كهف مسكون", @"ديلاي", @"ديلاي شريط", @"غرفة", @"قاعة", @"ستاديوم", @"فضاء"];
+    CGFloat mbw = (w - 16) / 3.0;
+    NSMutableArray *mb = [NSMutableArray array];
+    for (NSInteger i = 0; i < 7; i++) {
+        NSInteger col = i % 3, row = i / 3;
+        UIButton *b = [self makeButton:modeNames[i]
+                                 frame:CGRectMake(16 + col * (mbw + 8), y + row * 40, mbw, 32)
+                                   tag:i action:@selector(modeTapped:)];
+        [tabEcho addSubview:b];
+        [mb addObject:b];
+    }
+    self.modeBtns = mb;
+    y += 3 * 40 + 2;
+    y = [self addHint:@"«كهف مسكون» = كهف + تكرار مبعثر." to:tabEcho y:y height:48];
+
+    CGFloat tw = (w - 12) / 2.0;
+    [self addToggle:T_CAVE   to:tabEcho x:16 y:y width:tw];
+    [self addToggle:T_REPEAT to:tabEcho x:16 + tw + 12 y:y width:tw];
+    y += 40;
+
+    y = [self addHeader:@"🔊 عام" to:tabEcho y:y];
+    y = [self addSlider:S_LEVEL to:tabEcho y:y];
+    y = [self addSlider:S_BOOST to:tabEcho y:y];
+    y = [self addSlider:S_RANGE to:tabEcho y:y];
+
+    y = [self addHeader:@"👻 الكهف" to:tabEcho y:y];
+    y = [self addSlider:S_CAVEAMT to:tabEcho y:y];
+    y = [self addSlider:S_DAMP to:tabEcho y:y];
+    y = [self addSlider:S_MOD to:tabEcho y:y];
+
+    y = [self addHeader:@"🔁 التكرار المبعثر" to:tabEcho y:y];
+    y = [self addSlider:S_REPAMT to:tabEcho y:y];
+    y = [self addSlider:S_TAPSPEED to:tabEcho y:y];
+    y = [self addSlider:S_TAPFB to:tabEcho y:y];
+    y = [self addSlider:S_TAPSCAT to:tabEcho y:y];
+
+    y = [self addHint:@"تردد التكرار والتبعثر." to:tabEcho y:y height:48];
+    [tabEcho addSubview:[self makeButton:@"↺ رجّع الافتراضي" frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(resetEcho)]];
+    y += 34 + 16;
+    tabEcho.contentSize = CGSizeMake(kPanelW, y);
+
+    // 2. تبويب الموازن
+    y = 4;
+    y = [self addHeader:@"موازن ترددات الصدى" to:tabEq y:y];
+    CGFloat ebw = (w - 4 * 6) / 5.0;
+    for (NSInteger i = 0; i < 5; i++) {
+        [tabEq addSubview:[self makeButton:kEqPresetNames[i] frame:CGRectMake(16 + i * (ebw + 6), y, ebw, 32) tag:i action:@selector(eqPresetTapped:)]];
+    }
+    y += 42;
+    [tabEq addSubview:[self makeButton:@"🌊 شيل موجة الذيل" frame:CGRectMake(16, y, w, 32) tag:0 action:@selector(deWaveTapped)]];
+    y += 42;
+    y = [self addHeader:@"النطاقات" to:tabEq y:y];
+    y = [self addSlider:S_EQLOF to:tabEq y:y];
+    y = [self addSlider:S_EQHIF to:tabEq y:y];
+    y = [self addSlider:S_EQLO to:tabEq y:y];
+    y = [self addSlider:S_EQMID to:tabEq y:y];
+    y = [self addSlider:S_EQHI to:tabEq y:y];
+    tabEq.contentSize = CGSizeMake(kPanelW, y + 10);
+
+    // 3. تبويب النبرة
+    self.pitchLabel = [self makeLabelAt:CGRectMake(16, 4, w, 26) size:16 bold:YES alpha:1];
+    [tabPitch addSubview:self.pitchLabel];
+    self.pitchSlider = [self makeSliderAt:CGRectMake(16, 32, w, 30) min:-12 max:12 value:pitch action:@selector(pitchChanged:)];
+    [tabPitch addSubview:self.pitchSlider];
+
+    NSArray *names = @[@"عادي", @"بنت", @"رجل", @"وحش", @"روبوت", @"🎲 عشوائي"];
+    CGFloat pbw = (w - 16) / 3.0;
+    for (NSInteger i = 0; i < 6; i++) {
+        NSInteger col = i % 3, row = i / 3;
+        CGRect f = CGRectMake(16 + col * (pbw + 8), 76 + row * 42, pbw, 34);
+        [tabPitch addSubview:[self makeButton:names[i] frame:f tag:i action:@selector(presetTapped:)]];
+    }
+    tabPitch.contentSize = CGSizeMake(kPanelW, 230);
+
+    // 4. تبويب المايك
+    y = 4;
+    y = [self addSlider:S_GAIN to:tabAmp y:y];
+    NSArray *quickNames = @[@"عادي", @"×2", @"×5", @"×8", @"×12", @"×16"];
+    NSArray *quickTags  = @[@100, @200, @500, @800, @1200, @1600];
+    CGFloat qbw = (w - 6 * 5) / 6.0;
+    for (NSInteger i = 0; i < 6; i++) {
+        CGRect f = CGRectMake(16 + i * (qbw + 6), y + 4, qbw, 32);
+        [tabAmp addSubview:[self makeButton:quickNames[i] frame:f tag:[quickTags[i] integerValue] action:@selector(gainQuick:)]];
+    }
+    y += 48;
+
+    UILabel *meterLabel = [self makeLabelAt:CGRectMake(16, y, w, 18) size:13 bold:NO alpha:0.7];
+    meterLabel.text = @"مستوى المايك";
+    [tabAmp addSubview:meterLabel];
+    y += 24;
+
+    UIProgressView *meter = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+    meter.frame = CGRectMake(16, y, w, 8);
+    meter.trackTintColor = [UIColor colorWithWhite:1 alpha:0.15];
+    meter.progressTintColor = [UIColor systemGreenColor];
+    [tabAmp addSubview:meter];
+    self.meter = meter;
+    y += 20;
+
+    self.micStatus = [self makeLabelAt:CGRectMake(16, y, w, 20) size:13 bold:YES alpha:0.9];
+    self.micStatus.text = @"🔴 المايك مو شغال";
+    self.micStatus.textColor = [UIColor systemOrangeColor];
+    [tabAmp addSubview:self.micStatus];
+    y += 32;
+
+    y = [self addHeader:@"🎧 أسمع صوتي" to:tabAmp y:y];
+    [self addToggle:T_SELFMON to:tabAmp x:16 y:y width:w];
     y += 38;
+    y = [self addSlider:S_SELFVOL to:tabAmp y:y];
+    self.monWarn = [self makeLabelAt:CGRectMake(16, y, w, 34) size:12 bold:YES alpha:1];
+    self.monWarn.textColor = [UIColor systemOrangeColor];
+    [tabAmp addSubview:self.monWarn];
+    y += 40;
+    tabAmp.contentSize = CGSizeMake(kPanelW, y + 10);
 
-    [tabMusic addSubview:[self makeButton:@"🌐 فتح متصفح يوتيوب" frame:CGRectMake(16, y, w, 38) tag:0 action:@selector(browseSong)]];
-    y += 46;
+    // 5. تبويب الأغاني والمتصفح المباشر
+    self.songLabel = [self makeLabelAt:CGRectMake(16, 4, w, 34) size:13 bold:YES alpha:1];
+    self.songLabel.text = @"لم يتم اختيار أغنية. افتح متصفح يوتيوب لتشغيلها.";
+    [tabMusic addSubview:self.songLabel];
 
-    UISlider *seek = [self makeSliderAt:CGRectMake(16, y, w, 28) min:0 max:1 value:0 action:@selector(seekChanged:)];
+    [tabMusic addSubview:[self makeButton:@"🌐 فتح متصفح يوتيوب" frame:CGRectMake(16, 44, w, 38) tag:0 action:@selector(browseSong)]];
+
+    UISlider *seek = [self makeSliderAt:CGRectMake(16, 90, w, 28) min:0 max:1 value:0 action:@selector(seekChanged:)];
     [seek addTarget:self action:@selector(seekBegan:) forControlEvents:UIControlEventTouchDown];
     [seek addTarget:self action:@selector(seekEnded:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
     [tabMusic addSubview:seek];
     self.seekSlider = seek;
-    y += 32;
 
-    self.timeLabel = [self makeLabelAt:CGRectMake(16, y, w, 18) size:12 bold:NO alpha:0.7];
+    self.timeLabel = [self makeLabelAt:CGRectMake(16, 120, w, 18) size:12 bold:NO alpha:0.7];
     self.timeLabel.text = @"0:00 / 0:00";
     [tabMusic addSubview:self.timeLabel];
-    y += 24;
 
     CGFloat hb = (w - 8) / 2.0;
-    self.playBtn = [self makeButton:@"▶︎ تشغيل" frame:CGRectMake(16, y, hb, 36) tag:0 action:@selector(playTapped)];
+    self.playBtn = [self makeButton:@"▶︎ تشغيل" frame:CGRectMake(16, 144, hb, 36) tag:0 action:@selector(playTapped)];
     [tabMusic addSubview:self.playBtn];
-    [tabMusic addSubview:[self makeButton:@"⏹ إيقاف" frame:CGRectMake(16 + hb + 8, y, hb, 36) tag:0 action:@selector(stopTapped)]];
-    y += 44;
+    [tabMusic addSubview:[self makeButton:@"⏹ إيقاف" frame:CGRectMake(16 + hb + 8, 144, hb, 36) tag:0 action:@selector(stopTapped)]];
 
+    y = 192;
     y = [self addSlider:S_MUSVOL to:tabMusic y:y];
     [self addToggle:T_LOOP     to:tabMusic x:16 y:y width:w]; y += 36;
     [self addToggle:T_MUTE     to:tabMusic x:16 y:y width:w]; y += 36;
@@ -818,6 +879,9 @@ static NSString *EchoTime(float s) {
     [self addToggle:T_MONITOR  to:tabMusic x:16 y:y width:w]; y += 40;
     y = [self addSlider:S_MONVOL to:tabMusic y:y];
     tabMusic.contentSize = CGSizeMake(kPanelW, y + 10);
+
+    [self refreshModeButtons];
+    [self updatePitchLabel];
 }
 
 - (void)updateSpecLabel:(int)idx {
@@ -825,6 +889,13 @@ static NSString *EchoTime(float s) {
     int v = (int)lroundf(_sl[idx].value);
     if (v == 0 && sp->zero) _lb[idx].text = sp->zero;
     else _lb[idx].text = [NSString stringWithFormat:@"%@: %d%@", sp->title, v, sp->unit];
+}
+
+- (void)updatePitchLabel {
+    int st = (int)lroundf(self.pitchSlider.value);
+    NSString *t = (st == 0) ? @"النبرة: عادية" : [NSString stringWithFormat:@"النبرة: %+d نغمة", st];
+    if (self.robot) t = [t stringByAppendingString:@"  ·  🤖 روبوت"];
+    self.pitchLabel.text = t;
 }
 
 - (void)tabChanged:(UISegmentedControl *)sender {
@@ -849,6 +920,11 @@ static NSString *EchoTime(float s) {
     [self applySpec:(int)s.tag value:(int)lroundf(s.value)];
 }
 
+- (void)setSpec:(int)idx to:(int)v {
+    _sl[idx].value = v;
+    [self applySpec:idx value:v];
+}
+
 - (void)setToggle:(int)idx on:(BOOL)on {
     const ToggleSpec *t = &kToggles[idx];
     _sw[idx].on = on;
@@ -862,6 +938,69 @@ static NSString *EchoTime(float s) {
     [self saveInt:s.on ? 1 : 0 key:t->key];
 }
 
+- (void)refreshModeButtons {
+    for (UIButton *b in (NSArray *)self.modeBtns) {
+        b.backgroundColor = (b.tag == self.mode)
+            ? [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95]
+            : [UIColor colorWithWhite:1 alpha:0.14];
+    }
+}
+
+- (void)applyMode:(NSInteger)m {
+    self.mode = m;
+    DiscordEcho_SetMode((int)m);
+    [self saveInt:(int)m key:kModeKey];
+    [self refreshModeButtons];
+}
+
+- (void)modeTapped:(UIButton *)b { [self applyMode:b.tag]; }
+
+- (void)resetEcho {
+    for (int i = S_LEVEL; i <= S_EQHI; i++) [self setSpec:i to:kSliders[i].def];
+    [self setToggle:T_CAVE on:kToggles[T_CAVE].def != 0];
+    [self setToggle:T_REPEAT on:kToggles[T_REPEAT].def != 0];
+    [self applyMode:0];
+}
+
+- (void)applyEqPreset:(NSInteger)i {
+    static const int idx[5] = { S_EQLOF, S_EQHIF, S_EQLO, S_EQMID, S_EQHI };
+    for (int k = 0; k < 5; k++) [self setSpec:idx[k] to:kEqPresets[i][k]];
+}
+- (void)eqPresetTapped:(UIButton *)b { [self applyEqPreset:b.tag]; }
+- (void)deWaveTapped {
+    [self applyEqPreset:2];
+    [self setSpec:S_MOD to:20];
+    [self setSpec:S_DAMP to:65];
+}
+
+- (void)applyPitch:(int)st robot:(BOOL)robot {
+    if (st < -12) st = -12;
+    if (st > 12) st = 12;
+    self.pitchSlider.value = st;
+    self.robot = robot;
+    DiscordEcho_SetPitch(st);
+    DiscordEcho_SetRobot(robot ? 1 : 0);
+    [self saveInt:st key:kPitchKey];
+    [self saveInt:robot ? 1 : 0 key:kRobotKey];
+    [self updatePitchLabel];
+}
+- (void)pitchChanged:(UISlider *)s { [self applyPitch:(int)lroundf(s.value) robot:self.robot]; }
+- (void)presetTapped:(UIButton *)b {
+    switch (b.tag) {
+        case 0: [self applyPitch:0  robot:NO];  break;
+        case 1: [self applyPitch:5  robot:NO];  break;
+        case 2: [self applyPitch:-4 robot:NO];  break;
+        case 3: [self applyPitch:-9 robot:NO];  break;
+        case 4: [self applyPitch:0  robot:YES]; break;
+        default: {
+            int st = (int)arc4random_uniform(21) - 10;
+            [self applyPitch:st robot:(arc4random_uniform(4) == 0)];
+        }
+    }
+}
+
+- (void)gainQuick:(UIButton *)b { [self setSpec:S_GAIN to:(int)b.tag]; }
+
 - (void)browseSong {
     EchoBrowserController *vc = [EchoBrowserController new];
     __weak EchoController *ws = self;
@@ -872,7 +1011,7 @@ static NSString *EchoTime(float s) {
 
 - (void)loadSongAtURL:(NSURL *)url name:(NSString *)name {
     DiscordEcho_MusicPlay(0);
-    self.songLabel.text = [NSString stringWithFormat:@"⏳ جاري تحويل وتحميل: %@", name];
+    self.songLabel.text = [NSString stringWithFormat:@"⏳ جاري تحميل: %@", name];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         size_t count = 0;
         BOOL truncated = NO;
@@ -880,7 +1019,7 @@ static NSString *EchoTime(float s) {
         [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!buf) {
-                self.songLabel.text = @"❌ فشل تحميل المقطع";
+                self.songLabel.text = @"❌ فشل تحميل الملف الصوتي";
                 return;
             }
             DiscordEcho_MusicLoad(buf, count);
@@ -917,17 +1056,84 @@ static NSString *EchoTime(float s) {
     self.seeking = NO;
 }
 
+- (void)startTimer {
+    if (self.timer) return;
+    __weak EchoController *ws = self;
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES block:^(NSTimer *t) {
+        EchoController *s = ws;
+        if (!s || s.panel.hidden) return;
+        NSInteger tab = s.tabs.selectedSegmentIndex;
+        if (tab == TAB_AMP) {
+            float pk = DiscordEcho_GetPeak();
+            if (pk > 1.0f) pk = 1.0f;
+            s.meter.progress = pk;
+            unsigned c = DiscordEcho_RenderCount();
+            NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+            if (c != s.lastRender) { s.lastRender = c; s.lastRenderTime = now; }
+            BOOL live = (c != 0) && (now - s.lastRenderTime) < 0.6;
+            s.micStatus.text = live ? @"🟢 المايك شغال" : @"🔴 المايك مو شغال";
+            s.micStatus.textColor = live ? [UIColor systemGreenColor] : [UIColor systemOrangeColor];
+        } else if (tab == TAB_MUSIC) {
+            [s refreshMusicUI];
+        }
+    }];
+}
+
+- (void)stopTimer {
+    [self.timer invalidate];
+    self.timer = nil;
+}
+
 - (void)togglePanel {
     self.panel.hidden = !self.panel.hidden;
-    if (!self.panel.hidden) {
-        CGRect b = self.view.bounds;
-        CGFloat w = kPanelW, h = MIN(kPanelH, b.size.height - 20);
-        self.panel.frame = CGRectMake((b.size.width - w)/2, (b.size.height - h)/2, w, h);
+    if (self.panel.hidden) {
+        [self stopTimer];
+    } else {
+        [self positionPanel];
+        [self startTimer];
     }
 }
+
+- (void)positionPanel {
+    CGRect b = self.view.bounds;
+    CGFloat w = kPanelW, h = MIN(kPanelH, b.size.height - 20);
+    CGFloat x = CGRectGetMidX(self.fab.frame) - w / 2;
+    x = MAX(10, MIN(x, b.size.width - w - 10));
+    CGFloat y = CGRectGetMaxY(self.fab.frame) + 10;
+    if (y + h > b.size.height - 10) y = CGRectGetMinY(self.fab.frame) - h - 10;
+    self.panel.frame = CGRectMake(x, MAX(10, y), w, h);
+}
+
+- (void)dragFab:(UIPanGestureRecognizer *)g {
+    CGPoint t = [g translationInView:self.view];
+    self.fab.center = CGPointMake(self.fab.center.x + t.x, self.fab.center.y + t.y);
+    [g setTranslation:CGPointZero inView:self.view];
+    [self clampFab];
+    if (!self.panel.hidden) [self positionPanel];
+}
+
+- (void)clampFab {
+    CGRect b = self.view.bounds;
+    UIEdgeInsets s = self.view.safeAreaInsets;
+    CGFloat r = 26;
+    CGPoint c = self.fab.center;
+    c.x = MAX(r + s.left, MIN(c.x, b.size.width - r - s.right));
+    c.y = MAX(r + s.top,  MIN(c.y, b.size.height - r - s.bottom));
+    self.fab.center = c;
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    [self clampFab];
+    if (!self.panel.hidden) [self positionPanel];
+}
+
 @end
 
+#pragma mark - تهيئة الأداة
+
 static EchoWindow *gWin;
+
 static void echo_setup_window(void) {
     if (gWin) return;
     UIWindowScene *scene = nil;
@@ -944,8 +1150,17 @@ static void echo_setup_window(void) {
     gWin.hidden = NO;
 }
 
+static void echo_apply_saved(void) {
+    for (int i = 0; i < S_COUNT; i++) kSliders[i].set(EchoInt(kSliders[i].key, kSliders[i].def));
+    for (int i = 0; i < T_COUNT; i++) kToggles[i].set(EchoInt(kToggles[i].key, kToggles[i].def));
+    DiscordEcho_SetMode(EchoInt(kModeKey, 0));
+    DiscordEcho_SetPitch(EchoInt(kPitchKey, 0));
+    DiscordEcho_SetRobot(EchoInt(kRobotKey, 0));
+}
+
 __attribute__((constructor))
 static void echo_ui_init(void) {
+    echo_apply_saved();
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
     [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
         gAppReady = YES; echo_setup_window(); echo_monitor_sync();
