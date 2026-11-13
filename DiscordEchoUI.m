@@ -1047,7 +1047,7 @@ static NSString *EchoTime(float s) {
                                       : (pk > 0.8f)  ? [UIColor systemOrangeColor]
                                                      : [UIColor systemGreenColor];
             unsigned c = DiscordEcho_RenderCount();
-            CFTimeInterval now = CACurrentMediaTime();
+            NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
             if (c != s.lastRender) { s.lastRender = c; s.lastRenderTime = now; }
             BOOL live = (c != 0) && (now - s.lastRenderTime) < 0.6;
             s.micStatus.text = live ? @"🟢 المايك شغال" : @"🔴 المايك مو شغال. ادخل روم صوتي وافتح المايك";
