@@ -90,7 +90,7 @@ enum {
 static const SliderSpec kSliders[S_COUNT] = {
     [S_LEVEL]    = { @"شدة الصدى",             @"",     @"DiscordEchoLevel",   0, 100,  50, DiscordEcho_SetLevel,         @"الصدى: متوقف" },
     [S_BOOST]    = { @"مضخّم الصدى",           @"%",    @"DiscordEchoBoost", 100, 400, 100, DiscordEcho_SetEchoBoost,     nil },
-    [S_RANGE]    = { @"مدى الصدى",             @"",     @"DiscordEchoRange",   0, 100,  60, DiscordEcho_SetRange,         nil },
+    [S_RANGE]    = { @"مدى الصدى (الأقصى ≈ 40 ث)",             @"",     @"DiscordEchoRange",   0, 100,  60, DiscordEcho_SetRange,         nil },
     [S_CAVEAMT]  = { @"شدة الكهف",             @"",     @"DiscordEchoCaveAmt", 0, 100, 100, DiscordEcho_SetCaveAmount,    nil },
     [S_DAMP]     = { @"تغميق الذيل",           @"",     @"DiscordEchoDamp",    0, 100,  40, DiscordEcho_SetDamp,          nil },
     [S_MOD]      = { @"تنعيم الموجة",          @"",     @"DiscordEchoMod",     0, 100,  50, DiscordEcho_SetMod,           nil },
@@ -301,12 +301,14 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - بحث الأغاني (Audius)
+#pragma mark - بحث الأغاني (3 مصادر)
 
-// Audius: منصة موسيقى فنانين مستقلين، لها API رسمي للبث. نبحث، نختار، ننزّل مؤقتاً، ونشغّل.
+// 0 = iTunes (مقاطع 30 ثانية لأغاني مشهورة)، 1 = Internet Archive (أغاني كاملة مرخّصة/عامة)، 2 = Audius (فنانين مستقلين)
+// كلها واجهات عامة رسمية بدون مفتاح. نبحث، نختار، ننزّل مؤقتاً، ونشغّل.
 @interface EchoSearchController : UIViewController <UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
 @property (nonatomic, strong) UISearchBar *bar;
+@property (nonatomic, strong) UISegmentedControl *src;
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, strong) UILabel *status;
 @property (nonatomic, strong) UIButton *closeBtn;
@@ -326,6 +328,16 @@ static NSString *EchoTime(float s) {
     [self.closeBtn addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.closeBtn];
 
+    self.src = [[UISegmentedControl alloc] initWithItems:@[@"🎵 مشاهير (30 ث)", @"🆓 كاملة", @"Audius"]];
+    self.src.selectedSegmentIndex = 0;
+    self.src.selectedSegmentTintColor = [UIColor colorWithWhite:1 alpha:0.28];
+    NSDictionary *white = @{ NSForegroundColorAttributeName: UIColor.whiteColor,
+                             NSFontAttributeName: [UIFont boldSystemFontOfSize:12] };
+    [self.src setTitleTextAttributes:white forState:UIControlStateNormal];
+    [self.src setTitleTextAttributes:white forState:UIControlStateSelected];
+    [self.src addTarget:self action:@selector(sourceChanged) forControlEvents:UIControlEventValueChanged];
+    [self.view addSubview:self.src];
+
     self.bar = [[UISearchBar alloc] init];
     self.bar.placeholder = @"🔍 اسم أغنية أو فنان";
     self.bar.delegate = self;
@@ -337,8 +349,9 @@ static NSString *EchoTime(float s) {
     self.status.textAlignment = NSTextAlignmentCenter;
     self.status.font = [UIFont systemFontOfSize:13];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
-    self.status.text = @"اكتب اسم الأغنية واضغط بحث. المصدر: Audius";
+    self.status.numberOfLines = 2;
     [self.view addSubview:self.status];
+    [self sourceChanged];
 
     self.table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     self.table.dataSource = self;
@@ -352,9 +365,10 @@ static NSString *EchoTime(float s) {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds;
     self.closeBtn.frame = CGRectMake(b.size.width - 96, 10, 84, 34);
-    self.bar.frame = CGRectMake(8, 46, b.size.width - 16, 50);
-    self.status.frame = CGRectMake(16, 98, b.size.width - 32, 24);
-    self.table.frame = CGRectMake(0, 126, b.size.width, b.size.height - 126);
+    self.src.frame = CGRectMake(16, 48, b.size.width - 32, 32);
+    self.bar.frame = CGRectMake(8, 84, b.size.width - 16, 50);
+    self.status.frame = CGRectMake(16, 136, b.size.width - 32, 38);
+    self.table.frame = CGRectMake(0, 178, b.size.width, b.size.height - 178);
 }
 
 - (void)closeTapped {
@@ -362,7 +376,28 @@ static NSString *EchoTime(float s) {
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
-- (NSURLQueryItem *)appNameItem { return [NSURLQueryItem queryItemWithName:@"app_name" value:kEchoAppName]; }
+- (void)sourceChanged {
+    [self.task cancel];
+    self.items = @[];
+    [self.table reloadData];
+    switch (self.src.selectedSegmentIndex) {
+        case 0: self.status.text = @"أغاني مشهورة من iTunes. مقطع 30 ثانية لكل أغنية (فعّل «تكرار الأغنية»)"; break;
+        case 1: self.status.text = @"أغاني كاملة من Internet Archive (موسيقى حرة ومرخّصة). المشاهير غالباً مو موجودين هنا"; break;
+        default: self.status.text = @"أغاني كاملة لفنانين مستقلين من Audius"; break;
+    }
+}
+
+static NSString *EchoStr(id v) { return [v isKindOfClass:NSString.class] ? v : @""; }
+static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatValue] : 0.0f; }
+
+- (void)finishSearch:(NSArray *)out failed:(BOOL)failed code:(NSInteger)code {
+    self.items = out;
+    [self.table reloadData];
+    if (failed) self.status.text = [NSString stringWithFormat:@"❌ ما قدرت أتصل بالبحث%@. تأكد من النت أو جرّب مصدر ثاني",
+                                    code ? [NSString stringWithFormat:@" (رمز %ld)", (long)code] : @""];
+    else if (out.count == 0) self.status.text = @"ما لقيت نتائج، جرّب كلمة ثانية أو مصدر ثاني (فوق)";
+    else self.status.text = [NSString stringWithFormat:@"%lu نتيجة. اضغط على أغنية لتشغيلها", (unsigned long)out.count];
+}
 
 - (void)searchBarSearchButtonClicked:(UISearchBar *)bar {
     [bar resignFirstResponder];
@@ -370,45 +405,88 @@ static NSString *EchoTime(float s) {
     if (q.length == 0) return;
     [self.task cancel];
     self.status.text = @"⏳ جاري البحث…";
-    NSURLComponents *c = [NSURLComponents componentsWithString:@"https://api.audius.co/v1/tracks/search"];
-    c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"query" value:q],
-                      [NSURLQueryItem queryItemWithName:@"limit" value:@"25"],
-                      [self appNameItem] ];
+
+    NSInteger source = self.src.selectedSegmentIndex;
+    NSURLComponents *c = nil;
+    if (source == 0) {
+        c = [NSURLComponents componentsWithString:@"https://itunes.apple.com/search"];
+        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"term" value:q],
+                          [NSURLQueryItem queryItemWithName:@"media" value:@"music"],
+                          [NSURLQueryItem queryItemWithName:@"entity" value:@"song"],
+                          [NSURLQueryItem queryItemWithName:@"limit" value:@"30"] ];
+    } else if (source == 1) {
+        c = [NSURLComponents componentsWithString:@"https://archive.org/advancedsearch.php"];
+        NSString *query = [NSString stringWithFormat:@"(title:(%@) OR creator:(%@)) AND mediatype:audio", q, q];
+        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"q" value:query],
+                          [NSURLQueryItem queryItemWithName:@"fl[]" value:@"identifier"],
+                          [NSURLQueryItem queryItemWithName:@"fl[]" value:@"title"],
+                          [NSURLQueryItem queryItemWithName:@"fl[]" value:@"creator"],
+                          [NSURLQueryItem queryItemWithName:@"sort[]" value:@"downloads desc"],
+                          [NSURLQueryItem queryItemWithName:@"rows" value:@"30"],
+                          [NSURLQueryItem queryItemWithName:@"output" value:@"json"] ];
+    } else {
+        c = [NSURLComponents componentsWithString:@"https://api.audius.co/v1/tracks/search"];
+        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"query" value:q],
+                          [NSURLQueryItem queryItemWithName:@"limit" value:@"25"],
+                          [NSURLQueryItem queryItemWithName:@"app_name" value:kEchoAppName] ];
+    }
+
     __weak EchoSearchController *ws = self;
     NSURLSessionDataTask *t = [NSURLSession.sharedSession dataTaskWithURL:c.URL
         completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
         if (e && e.code == NSURLErrorCancelled) return;
+        NSInteger code = [r isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)r).statusCode : 0;
         NSMutableArray *out = [NSMutableArray array];
-        if (d && !e) {
-            id j = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
-            id arr = [j isKindOfClass:NSDictionary.class] ? ((NSDictionary *)j)[@"data"] : nil;
-            if ([arr isKindOfClass:NSArray.class]) {
-                for (id it in (NSArray *)arr) {
+        BOOL ok = (d != nil && e == nil && code >= 200 && code < 300);
+        id j = ok ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        if ([j isKindOfClass:NSDictionary.class]) {
+            NSDictionary *root = j;
+            if (source == 0) {
+                id arr = root[@"results"];
+                if ([arr isKindOfClass:NSArray.class]) for (id it in (NSArray *)arr) {
+                    if (![it isKindOfClass:NSDictionary.class]) continue;
+                    NSString *prev = EchoStr(it[@"previewUrl"]);
+                    if (prev.length == 0) continue;
+                    [out addObject:@{ @"title": EchoStr(it[@"trackName"]), @"artist": EchoStr(it[@"artistName"]),
+                                      @"dur": @(EchoNum(it[@"trackTimeMillis"]) / 1000.0f > 30 ? 30.0f : EchoNum(it[@"trackTimeMillis"]) / 1000.0f),
+                                      @"url": prev, @"ext": @"m4a" }];
+                }
+            } else if (source == 1) {
+                id resp = root[@"response"];
+                id arr = [resp isKindOfClass:NSDictionary.class] ? ((NSDictionary *)resp)[@"docs"] : nil;
+                if ([arr isKindOfClass:NSArray.class]) for (id it in (NSArray *)arr) {
+                    if (![it isKindOfClass:NSDictionary.class]) continue;
+                    NSString *ident = EchoStr(it[@"identifier"]);
+                    if (ident.length == 0) continue;
+                    id cr = it[@"creator"];
+                    if ([cr isKindOfClass:NSArray.class]) cr = [(NSArray *)cr firstObject];
+                    id ti = it[@"title"];
+                    if ([ti isKindOfClass:NSArray.class]) ti = [(NSArray *)ti firstObject];
+                    [out addObject:@{ @"title": EchoStr(ti).length ? EchoStr(ti) : ident, @"artist": EchoStr(cr),
+                                      @"dur": @0, @"archive": ident }];
+                }
+            } else {
+                id arr = root[@"data"];
+                if ([arr isKindOfClass:NSArray.class]) for (id it in (NSArray *)arr) {
                     if (![it isKindOfClass:NSDictionary.class]) continue;
                     NSDictionary *tr = it;
-                    id tid = tr[@"id"], title = tr[@"title"];
-                    if (![tid isKindOfClass:NSString.class] || ![title isKindOfClass:NSString.class]) continue;
+                    NSString *tid = EchoStr(tr[@"id"]);
+                    if (tid.length == 0 || EchoStr(tr[@"title"]).length == 0) continue;
                     id streamable = tr[@"is_streamable"];
                     if ([streamable isKindOfClass:NSNumber.class] && ![streamable boolValue]) continue;
-                    if ([tr[@"stream_conditions"] isKindOfClass:NSDictionary.class]) continue;   // محتوى مقفول
+                    if ([tr[@"stream_conditions"] isKindOfClass:NSDictionary.class]) continue;
                     id user = tr[@"user"];
-                    NSString *artist = ([user isKindOfClass:NSDictionary.class] &&
-                                        [user[@"name"] isKindOfClass:NSString.class]) ? user[@"name"] : @"";
-                    id dur = tr[@"duration"];
-                    [out addObject:@{ @"id": tid, @"title": title, @"artist": artist,
-                                      @"dur": [dur isKindOfClass:NSNumber.class] ? dur : @0 }];
+                    NSString *artist = [user isKindOfClass:NSDictionary.class] ? EchoStr(user[@"name"]) : @"";
+                    NSString *u = [NSString stringWithFormat:@"https://api.audius.co/v1/tracks/%@/stream?app_name=%@", tid, kEchoAppName];
+                    [out addObject:@{ @"title": EchoStr(tr[@"title"]), @"artist": artist,
+                                      @"dur": @(EchoNum(tr[@"duration"])), @"url": u, @"ext": @"mp3" }];
                 }
             }
         }
-        BOOL failed = (e != nil || d == nil);
         dispatch_async(dispatch_get_main_queue(), ^{
             EchoSearchController *s = ws;
             if (!s) return;
-            s.items = out;
-            [s.table reloadData];
-            s.status.text = failed ? @"❌ ما قدرت أتصل بالبحث. تأكد من النت وجرّب مرة ثانية"
-                          : (out.count == 0 ? @"ما لقيت نتائج، جرّب كلمة ثانية"
-                                            : [NSString stringWithFormat:@"%lu نتيجة. اضغط على أغنية لتشغيلها", (unsigned long)out.count]);
+            [s finishSearch:out failed:!ok code:code];
         });
     }];
     self.task = t;
@@ -427,28 +505,27 @@ static NSString *EchoTime(float s) {
     }
     NSDictionary *it = self.items[ip.row];
     cell.textLabel.text = it[@"title"];
-    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@  ·  %@", it[@"artist"], EchoTime([it[@"dur"] floatValue])];
+    float dur = [it[@"dur"] floatValue];
+    NSString *d = dur > 0 ? [NSString stringWithFormat:@"  ·  %@", EchoTime(dur)] : @"";
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@%@", it[@"artist"], d];
     return cell;
 }
 
-- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
-    [tv deselectRowAtIndexPath:ip animated:YES];
-    NSDictionary *it = self.items[ip.row];
-    NSString *tid = it[@"id"];
-    NSString *name = [it[@"artist"] length] ? [NSString stringWithFormat:@"%@ — %@", it[@"title"], it[@"artist"]] : it[@"title"];
-    self.status.text = @"⏳ جاري تنزيل الأغنية…";
-    self.view.userInteractionEnabled = NO;
+- (void)failDownload:(NSString *)msg {
+    self.view.userInteractionEnabled = YES;
+    self.status.text = msg;
+}
 
-    NSString *path = [NSString stringWithFormat:@"https://api.audius.co/v1/tracks/%@/stream", tid];
-    NSURLComponents *c = [NSURLComponents componentsWithString:path];
-    c.queryItems = @[ [self appNameItem] ];
+// ينزّل ملف من رابط مباشر إلى tmp ثم يسلّمه للمشغّل
+- (void)downloadURL:(NSURL *)url ext:(NSString *)ext name:(NSString *)name {
     __weak EchoSearchController *ws = self;
-    NSURLSessionDownloadTask *t = [NSURLSession.sharedSession downloadTaskWithURL:c.URL
+    NSURLSessionDownloadTask *t = [NSURLSession.sharedSession downloadTaskWithURL:url
         completionHandler:^(NSURL *loc, NSURLResponse *resp, NSError *err) {
+        if (err && err.code == NSURLErrorCancelled) return;
         NSInteger code = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : 0;
         NSURL *dest = nil;
         if (loc && !err && code >= 200 && code < 300) {
-            NSString *fn = [NSString stringWithFormat:@"echo_%@.mp3", tid];
+            NSString *fn = [NSString stringWithFormat:@"echo_%u.%@", arc4random(), ext];
             dest = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:fn]];
             [[NSFileManager defaultManager] removeItemAtURL:dest error:nil];
             if (![[NSFileManager defaultManager] moveItemAtURL:loc toURL:dest error:nil]) dest = nil;
@@ -456,14 +533,67 @@ static NSString *EchoTime(float s) {
         dispatch_async(dispatch_get_main_queue(), ^{
             EchoSearchController *s = ws;
             if (!s) return;
+            if (!dest) {
+                [s failDownload:[NSString stringWithFormat:@"❌ فشل التنزيل%@. جرّب أغنية ثانية أو مصدر ثاني",
+                                 code ? [NSString stringWithFormat:@" (رمز %ld)", (long)code] : @""]];
+                return;
+            }
             s.view.userInteractionEnabled = YES;
-            if (!dest) { s.status.text = @"❌ فشل التنزيل، جرّب أغنية ثانية"; return; }
             void (^cb)(NSURL *, NSString *) = s.onPick;
             [s dismissViewControllerAnimated:YES completion:^{ if (cb) cb(dest, name); }];
         });
     }];
     self.task = t;
     [t resume];
+}
+
+- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [tv deselectRowAtIndexPath:ip animated:YES];
+    NSDictionary *it = self.items[ip.row];
+    NSString *name = [it[@"artist"] length] ? [NSString stringWithFormat:@"%@ — %@", it[@"title"], it[@"artist"]] : it[@"title"];
+    self.status.text = @"⏳ جاري تنزيل الأغنية…";
+    self.view.userInteractionEnabled = NO;
+
+    NSString *archiveId = it[@"archive"];
+    if (archiveId) {
+        // Internet Archive: نجيب قائمة ملفات العنصر ونختار أول ملف mp3/m4a
+        NSString *mu = [NSString stringWithFormat:@"https://archive.org/metadata/%@",
+                        [archiveId stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet]];
+        __weak EchoSearchController *ws = self;
+        NSURLSessionDataTask *t = [NSURLSession.sharedSession dataTaskWithURL:[NSURL URLWithString:mu]
+            completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+            if (e && e.code == NSURLErrorCancelled) return;
+            NSString *file = nil;
+            id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+            id files = [j isKindOfClass:NSDictionary.class] ? ((NSDictionary *)j)[@"files"] : nil;
+            if ([files isKindOfClass:NSArray.class]) {
+                for (id f in (NSArray *)files) {
+                    if (![f isKindOfClass:NSDictionary.class]) continue;
+                    NSString *fname = EchoStr(f[@"name"]);
+                    NSString *low = fname.lowercaseString;
+                    if ([low hasSuffix:@".mp3"] || [low hasSuffix:@".m4a"]) {
+                        if ([low containsString:@"_spectrogram"] || [low containsString:@"sample"]) continue;
+                        file = fname;
+                        break;
+                    }
+                }
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                EchoSearchController *s = ws;
+                if (!s) return;
+                if (!file) { [s failDownload:@"❌ هذا العنصر ما فيه ملف mp3 قابل للتشغيل، جرّب غيره"]; return; }
+                NSString *enc = [file stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet];
+                NSString *du = [NSString stringWithFormat:@"https://archive.org/download/%@/%@",
+                                [archiveId stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet], enc];
+                NSString *ext = [file.lowercaseString hasSuffix:@".m4a"] ? @"m4a" : @"mp3";
+                [s downloadURL:[NSURL URLWithString:du] ext:ext name:name];
+            });
+        }];
+        self.task = t;
+        [t resume];
+        return;
+    }
+    [self downloadURL:[NSURL URLWithString:it[@"url"]] ext:(it[@"ext"] ?: @"mp3") name:name];
 }
 
 @end
@@ -825,7 +955,7 @@ static NSString *EchoTime(float s) {
     [self addToggle:T_SONGECHO to:tabMusic x:16 y:y width:w]; y += 36;
     [self addToggle:T_MONITOR  to:tabMusic x:16 y:y width:w]; y += 40;
     y = [self addSlider:S_MONVOL to:tabMusic y:y];
-    y = [self addHint:@"اللي معك في ديسكورد يسمعون الأغنية من مايكك مع الصدى.\n«أنا أسمع الأغنية» توصّلها لسماعتك أنت. الأفضل تستخدم سماعات، وإلا المايك يلتقطها من السبيكر ويدخل صدى زيادة.\nالبحث من Audius (موسيقى فنانين مستقلين)."
+    y = [self addHint:@"اللي معك في ديسكورد يسمعون الأغنية من مايكك مع الصدى.\n«أنا أسمع الأغنية» توصّلها لسماعتك أنت. الأفضل تستخدم سماعات، وإلا المايك يلتقطها من السبيكر ويدخل صدى زيادة.\nالبحث: مشاهير (مقاطع 30 ثانية)، كاملة (Internet Archive)، أو Audius."
                    to:tabMusic y:y height:92];
     tabMusic.contentSize = CGSizeMake(kPanelW, y + 10);
 
