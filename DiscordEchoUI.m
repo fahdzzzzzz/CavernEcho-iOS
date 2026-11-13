@@ -1,4 +1,4 @@
-// DiscordEchoUI: الكود المصحح وخالي من أخطاء البناء
+// DiscordEchoUI: الكود المصحح وخالي من أخطاء الـ Linker
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -180,7 +180,7 @@ static const ToggleSpec kToggles[T_COUNT] = {
     [T_CAVE]     = { @"كهف 👻",                    @"DiscordEchoCave",     1, DiscordEcho_SetCave },
     [T_REPEAT]   = { @"تكرار 🔁",                  @"DiscordEchoRepeat",   1, DiscordEcho_SetRepeat },
     [T_LOOP]     = { @"🔁 تكرار الأغنية",          @"DiscordEchoMusicLoop", 0, DiscordEcho_MusicSetLoop },
-    [T_MUTE]     = { @"🔇 كتم صوتي أثناء الأغنية", @"DiscordEchoVoiceMute", 0, DiscordEcho_SetVoiceMute }, // تم التصحيح هنا
+    [T_MUTE]     = { @"🔇 كتم صوتي أثناء الأغنية", @"DiscordEchoVoiceMute", 0, DiscordEcho_SetVoiceMute },
     [T_SONGECHO] = { @"👻 الصدى على الأغنية",      @"DiscordEchoSongEcho", 1, DiscordEcho_SetSongEcho },
     [T_MONITOR]  = { @"🎧 أنا أسمع الأغنية",       @"DiscordEchoMonitor",  0, echo_set_monitor },
     [T_SELFMON]  = { @"🎧 أسمع صوتي (مع الصدى)",   @"DiscordEchoSelfMon",  0, echo_set_selfmon },
@@ -283,7 +283,7 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - متصفح يوتيوب مع زر التحميل والتحويل المباشر
+#pragma mark - متصفح يوتيوب
 
 @interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
@@ -1044,7 +1044,7 @@ static NSString *EchoTime(float s) {
 }
 
 - (void)pickAudioFile {
-    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeAudio, UTTypeMP3, UTTypeMPEG4Audio] asCopy:YES];
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.audio", @"public.mp3", @"public.mpeg-4-audio"] inMode:UIDocumentPickerModeOpen];
     picker.delegate = self;
     [self presentViewController:picker animated:YES completion:nil];
 }
