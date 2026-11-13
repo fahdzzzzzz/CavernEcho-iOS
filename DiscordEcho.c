@@ -611,7 +611,7 @@ static OSStatus my_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
                           const AudioTimeStamp *ts, UInt32 bus,
                           UInt32 frames, AudioBufferList *io) {
     OSStatus st = orig_render(unit, flags, ts, bus, frames, io);
-    if (st != noErr || bus != 1 || io == NULL) return st;   // bus 1 = المايك
+    if (st != noErr || bus != 1 || io == NULL) return st;   // bus 1 = المايك[span_1](start_span)[span_1](end_span)
 
     if (unit != g_unit || !g_have_fmt) {
         UInt32 sz = sizeof(g_fmt);
@@ -619,6 +619,19 @@ static OSStatus my_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
                                  kAudioUnitScope_Output, 1, &g_fmt, &sz) == noErr) {
             g_unit = unit;
             g_have_fmt = 1;
+
+            // 💡 [تعديل جذري لمنع التشوه والتقطيع عند تبديل المايك أو إعادة التهيئة]:
+            // تفريغ كافة الذاكرة المؤقتة للمايك والأغنية وإعادة ضبط مؤشرات المعالجة فوراً
+            for (int i = 0; i < NCTX; i++) {
+                clear_ctx(i);
+                g_cleared[i] = 1;
+            }
+            for (int i = 0; i < MAX_BUFS; i++) {
+                memset(&g_ps[i], 0, sizeof(g_ps[i]));
+                g_ps_on[i] = 0;
+            }
+            g_robot_phase = 0.0f;
+
         } else {
             g_have_fmt = 0;
             return st;
