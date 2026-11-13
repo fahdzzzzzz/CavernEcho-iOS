@@ -41,7 +41,7 @@ extern void  DiscordEcho_MusicSeek(float frac);
 extern void  DiscordEcho_MusicSetVolume(int pct);
 extern void  DiscordEcho_MusicSetLoop(int on);
 extern int   DiscordEcho_MusicIsPlaying(void);
-extern float DiscordEcho_MusicProgress(float *prog); // handled via existing
+extern float DiscordEcho_MusicProgress(void);
 extern float DiscordEcho_MusicDuration(void);
 extern void  DiscordEcho_MonitorRead(float *out, unsigned n, double outRate);
 extern void  DiscordEcho_SetSelfMonitor(int on);
@@ -391,14 +391,11 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     self.status.text = @"انسخ رابط الفيديو من YouTube، ثم انتقل لـ Y2Mate للتحميل بصيغة MP3.";
     [self.view addSubview:self.status];
 
-    // استرجاع آخر صفحة تم تصفحها أو فتح يوتيوب افتراضياً
     NSString *savedURL = [[NSUserDefaults standardUserDefaults] stringForKey:kLastURLKey];
 
-    // النافذة الأولى (YouTube أو آخر رابط محفوظ)
     [self openTabWithConfig:nil];
     [self loadText:(savedURL.length > 0 ? savedURL : @"https://www.youtube.com")];
 
-    // النافذة الثانية (Y2Mate بالرابط المحدث)
     [self openTabWithConfig:nil];
     [self loadText:@"https://v42.www-y2mate.com/"];
 
@@ -484,7 +481,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self selectTab:n];
 }
 
-// ----- منع النوافذ الإعلانية المنبثقة وتحويلها لنفس الصفحة -----
 - (WKWebView *)webView:(WKWebView *)wv createWebViewWithConfiguration:(WKWebViewConfiguration *)cfg
    forNavigationAction:(WKNavigationAction *)a windowFeatures:(WKWindowFeatures *)f {
     if (a.request.URL) {
@@ -529,7 +525,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     return YES;
 }
 
-// ----- لقط التنزيلات (iOS 14.5+) -----
 - (BOOL)canDownload {
     if (@available(iOS 14.5, *)) return YES;
     return NO;
@@ -594,7 +589,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self dismissViewControllerAnimated:YES completion:^{ if (cb) cb(dest, name); }];
 }
 
-- (void)download:(id)d didFailWithError:(NSError *)e resumeData:(NSData *)rd {
+- (void)download:(id)d didFailWithError:(NSError *__nullable)e resumeData:(NSData *__nullable)rd {
     [self.dests removeObjectForKey:[NSValue valueWithNonretainedObject:d]];
     self.status.text = @"❌ فشل التنزيل. جرّب مرة ثانية أو موقع ثاني";
 }
@@ -617,20 +612,16 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 @property (nonatomic, strong) UIView *panel;
 @property (nonatomic, strong) UISegmentedControl *tabs;
 @property (nonatomic, strong) NSArray<UIView *> *tabViews;
-// الصدى
 @property (nonatomic, strong) NSArray<UIButton *> *modeBtns;
 @property (nonatomic) NSInteger mode;
-// النبرة
 @property (nonatomic, strong) UILabel *pitchLabel;
 @property (nonatomic, strong) UISlider *pitchSlider;
 @property (nonatomic) BOOL robot;
-// المضخّم
 @property (nonatomic, strong) UIProgressView *meter;
 @property (nonatomic, strong) UILabel *micStatus;
 @property (nonatomic, strong) UILabel *monWarn;
 @property (nonatomic) unsigned lastRender;
 @property (nonatomic) CFTimeInterval lastRenderTime;
-// الأغاني
 @property (nonatomic, strong) UILabel *songLabel;
 @property (nonatomic, strong) UILabel *timeLabel;
 @property (nonatomic, strong) UISlider *seekSlider;
@@ -640,8 +631,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 @end
 
 @implementation EchoController
-
-#pragma mark - عناصر مساعدة
 
 - (UILabel *)makeLabelAt:(CGRect)frame size:(CGFloat)size bold:(BOOL)bold alpha:(CGFloat)alpha {
     UILabel *l = [[UILabel alloc] initWithFrame:frame];
@@ -743,8 +732,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     _sw[idx] = sw;
 }
 
-#pragma mark - بناء الواجهة
-
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.clearColor;
@@ -798,7 +785,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 
     CGFloat y;
 
-    // ================= تبويب الصدى =================
+    // تبويب الصدى
     y = 4;
     y = [self addHeader:@"نوع الصدى (كل واحد لحاله)" to:tabEcho y:y];
     NSArray *modeNames = @[@"👻 كهف مسكون", @"ديلاي", @"ديلاي شريط", @"غرفة", @"قاعة", @"ستاديوم", @"فضاء"];
@@ -843,7 +830,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     y += 34 + 16;
     tabEcho.contentSize = CGSizeMake(kPanelW, y);
 
-    // ================= تبويب الموازن =================
+    // تبويب الموازن
     y = 4;
     y = [self addHeader:@"موازن ترددات الصدى" to:tabEq y:y];
     CGFloat ebw = (w - 4 * 6) / 5.0;
@@ -864,7 +851,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     y = [self addSlider:S_EQHI to:tabEq y:y];
     tabEq.contentSize = CGSizeMake(kPanelW, y + 10);
 
-    // ================= تبويب النبرة =================
+    // تبويب النبرة
     self.pitchLabel = [self makeLabelAt:CGRectMake(16, 4, w, 26) size:16 bold:YES alpha:1];
     [tabPitch addSubview:self.pitchLabel];
     self.pitchSlider = [self makeSliderAt:CGRectMake(16, 32, w, 30) min:-12 max:12 value:pitch action:@selector(pitchChanged:)];
@@ -880,7 +867,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self addHint:@"حرّك الشريط أو اختر نمط جاهز." to:tabPitch y:164 height:40];
     tabPitch.contentSize = CGSizeMake(kPanelW, 230);
 
-    // ================= تبويب المضخّم =================
+    // تبويب المضخّم
     y = 4;
     y = [self addSlider:S_GAIN to:tabAmp y:y];
     NSArray *quickNames = @[@"عادي", @"×2", @"×5", @"×8", @"×12", @"×16"];
@@ -922,7 +909,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 
     tabAmp.contentSize = CGSizeMake(kPanelW, y + 10);
 
-    // ================= تبويب الأغاني =================
+    // تبويب الأغاني
     self.songLabel = [self makeLabelAt:CGRectMake(16, 4, w, 34) size:13 bold:YES alpha:1];
     self.songLabel.text = @"ما فيه أغنية. افتح المتصفح أو اختر ملف من جهازك";
     [tabMusic addSubview:self.songLabel];
@@ -960,8 +947,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self refreshModeButtons];
     [self updatePitchLabel];
 }
-
-#pragma mark - تحديث النصوص والأحداث
 
 - (void)updateSpecLabel:(int)idx {
     const SliderSpec *sp = &kSliders[idx];
@@ -1158,8 +1143,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     self.seeking = NO;
 }
 
-#pragma mark - مؤقت
-
 - (void)startTimer {
     if (self.timer) return;
     __weak EchoController *ws = self;
@@ -1192,8 +1175,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self.timer invalidate];
     self.timer = nil;
 }
-
-#pragma mark - تحريك القائمة
 
 - (void)togglePanel {
     self.panel.hidden = !self.panel.hidden;
@@ -1242,8 +1223,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 }
 
 @end
-
-#pragma mark - تشغيل النافذة فوق ديسكورد
 
 static EchoWindow *gWin;
 
