@@ -41,7 +41,7 @@ extern void  DiscordEcho_MusicSeek(float frac);
 extern void  DiscordEcho_MusicSetVolume(int pct);
 extern void  DiscordEcho_MusicSetLoop(int on);
 extern int   DiscordEcho_MusicIsPlaying(void);
-extern float DiscordEcho_MusicProgress(void);
+extern float DiscordEcho_MusicProgress(float *prog); // handled via existing
 extern float DiscordEcho_MusicDuration(void);
 extern void  DiscordEcho_MonitorRead(float *out, unsigned n, double outRate);
 extern void  DiscordEcho_SetSelfMonitor(int on);
@@ -51,6 +51,7 @@ extern unsigned DiscordEcho_RenderCount(void);
 static NSString *const kModeKey  = @"DiscordEchoMode";
 static NSString *const kPitchKey = @"DiscordEchoPitch";
 static NSString *const kRobotKey = @"DiscordEchoRobot";
+static NSString *const kLastURLKey = @"DiscordEchoLastBrowserURL";
 
 static const CGFloat kPanelW = 340;
 static const CGFloat kPanelH = 460;
@@ -63,7 +64,7 @@ static int EchoInt(NSString *key, int def) {
     return [d objectForKey:key] ? (int)[d integerForKey:key] : def;
 }
 
-#pragma mark - جداول الإعدادات (شريط لكل رقم، وزر تشغيل لكل خيار)
+#pragma mark - جداول الإعدادات
 
 typedef struct {
     NSString *title;
@@ -114,7 +115,7 @@ typedef struct {
 
 enum { T_CAVE, T_REPEAT, T_LOOP, T_MUTE, T_SONGECHO, T_MONITOR, T_SELFMON, T_COUNT };
 
-#pragma mark - مراقبة: تشغيل الأغنية (مع الصدى) في سماعتك
+#pragma mark - مراقبة الصوت
 
 static AVAudioEngine *gMonEngine;
 static int gMonSong, gMonSelf;
@@ -260,8 +261,7 @@ static float *EchoDecodeFile(NSURL *url, size_t *outCount, BOOL *truncated, void
             return inBuf;
         }];
         if (st == AVAudioConverterOutputStatus_Error) break;
-        if (st == AVAudioConverterOutputStatus_EndOfStream ||
-            st == AVAudioConverterOutputStatus_InputRanDry) finished = YES;
+        if (st == AVAudioConverterOutputStatus_EndOfStream) finished = YES;
 
         AVAudioFrameCount got = outBuf.frameLength;
         float *const *chData = outBuf.floatChannelData;
@@ -303,7 +303,7 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - متصفح داخلي بنافذتين: YouTube و Y2Mate
+#pragma mark - متصفح داخلي (YouTube و Y2Mate مع منع النوافذ المنبثقة وحفظ الصفحة الأخيرة)
 
 static BOOL EchoIsAudioExt(NSString *ext) {
     static NSSet *set;
@@ -388,18 +388,20 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     self.status.font = [UIFont systemFontOfSize:12];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
     self.status.numberOfLines = 2;
-    self.status.text = @"انسخ رابط الفيديو من نافذة YouTube، ثم بدّل لنافذة Y2Mate وحمّله MP3 وراح يلقطه التطبيق تلقائياً.";
+    self.status.text = @"انسخ رابط الفيديو من YouTube، ثم انتقل لـ Y2Mate للتحميل بصيغة MP3.";
     [self.view addSubview:self.status];
 
-    // النافذة الأولى: YouTube
-    [self openTabWithConfig:nil];
-    [self loadText:@"https://www.youtube.com"];
+    // استرجاع آخر صفحة تم تصفحها أو فتح يوتيوب افتراضياً
+    NSString *savedURL = [[NSUserDefaults standardUserDefaults] stringForKey:kLastURLKey];
 
-    // النافذة الثانية: Y2Mate
+    // النافذة الأولى (YouTube أو آخر رابط محفوظ)
     [self openTabWithConfig:nil];
-    [self loadText:@"https://www.y2mate.com"];
+    [self loadText:(savedURL.length > 0 ? savedURL : @"https://www.youtube.com")];
 
-    // العودة للنافذة الأولى (YouTube) كبداية
+    // النافذة الثانية (Y2Mate بالرابط المحدث)
+    [self openTabWithConfig:nil];
+    [self loadText:@"https://v42.www-y2mate.com/"];
+
     [self selectTab:0];
 }
 
@@ -419,7 +421,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     self.status.frame = CGRectMake(12, b.size.height - sh, b.size.width - 24, sh);
 }
 
-// ----- النوافذ (تبويبات) -----
 - (WKWebView *)openTabWithConfig:(WKWebViewConfiguration *)cfg {
     if (!cfg) cfg = [[WKWebViewConfiguration alloc] init];
     WKWebView *w = [[WKWebView alloc] initWithFrame:CGRectZero configuration:cfg];
@@ -483,19 +484,28 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self selectTab:n];
 }
 
+// ----- منع النوافذ الإعلانية المنبثقة وتحويلها لنفس الصفحة -----
 - (WKWebView *)webView:(WKWebView *)wv createWebViewWithConfiguration:(WKWebViewConfiguration *)cfg
    forNavigationAction:(WKNavigationAction *)a windowFeatures:(WKWindowFeatures *)f {
-    return [self openTabWithConfig:cfg];
+    if (a.request.URL) {
+        [wv loadRequest:a.request];
+    }
+    return nil;
 }
 
 - (void)closeTapped {
+    NSURL *curURL = self.web.URL;
+    if (curURL) {
+        [[NSUserDefaults standardUserDefaults] setObject:curURL.absoluteString forKey:kLastURLKey];
+    }
     for (WKWebView *w in self.tabs) [w stopLoading];
     [self dismissViewControllerAnimated:YES completion:nil];
 }
+
 - (void)backTapped { if (self.web.canGoBack) [self.web goBack]; }
 
 - (void)quickTapped:(UIButton *)b {
-    NSArray *urls = @[@"https://www.youtube.com", @"https://www.y2mate.com"];
+    NSArray *urls = @[@"https://www.youtube.com", @"https://v42.www-y2mate.com/"];
     [self loadText:urls[b.tag]];
 }
 
@@ -744,7 +754,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     self.mode = EchoInt(kModeKey, 0);
     CGFloat w = kPanelW - 32;
 
-    // الزر العائم
     UIButton *fab = [UIButton buttonWithType:UIButtonTypeCustom];
     fab.frame = CGRectMake(20, 140, 52, 52);
     fab.backgroundColor = [UIColor colorWithWhite:0 alpha:0.65];
@@ -759,7 +768,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self.view addSubview:fab];
     self.fab = fab;
 
-    // القائمة
     UIView *panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kPanelW, kPanelH)];
     panel.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.95];
     panel.layer.cornerRadius = 16;
@@ -768,7 +776,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self.view addSubview:panel];
     self.panel = panel;
 
-    // التبويبات
     UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"الصدى", @"الموازن", @"النبرة", @"المايك", @"🎵"]];
     tabs.frame = CGRectMake(16, 12, kPanelW - 32, 34);
     tabs.selectedSegmentIndex = 0;
@@ -807,8 +814,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     }
     self.modeBtns = mb;
     y += 3 * 40 + 2;
-    y = [self addHint:@"«كهف مسكون» = كهف + تكرار مبعثر حسب الأزرار والأشرطة تحت. باقي المودات تشتغل لحالها وتتحكم فيها بالشدة والمدى وتردد التكرار."
-                   to:tabEcho y:y height:48];
+    y = [self addHint:@"«كهف مسكون» = كهف + تكرار مبعثر حسب الأزرار والأشرطة تحت." to:tabEcho y:y height:48];
 
     CGFloat tw = (w - 12) / 2.0;
     [self addToggle:T_CAVE   to:tabEcho x:16 y:y width:tw];
@@ -831,8 +837,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     y = [self addSlider:S_TAPFB to:tabEcho y:y];
     y = [self addSlider:S_TAPSCAT to:tabEcho y:y];
 
-    y = [self addHint:@"تردد التكرار: أكبر = تكرار أبطأ وأبعد. التبعثر ٠ = منتظم، ١٠٠ = مبعثر.\nلو ذيل الصدى يحس إنه يتموّج، نزّل «تنعيم الموجة» وارفع «تغميق الذيل»."
-                   to:tabEcho y:y height:48];
+    y = [self addHint:@"تردد التكرار والتبعثر." to:tabEcho y:y height:48];
     [tabEcho addSubview:[self makeButton:@"↺ رجّع إعدادات الصدى الافتراضية"
                                    frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(resetEcho)]];
     y += 34 + 16;
@@ -840,7 +845,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 
     // ================= تبويب الموازن =================
     y = 4;
-    y = [self addHeader:@"موازن ترددات الصدى (ما يأثر على صوتك)" to:tabEq y:y];
+    y = [self addHeader:@"موازن ترددات الصدى" to:tabEq y:y];
     CGFloat ebw = (w - 4 * 6) / 5.0;
     for (NSInteger i = 0; i < 5; i++) {
         [tabEq addSubview:[self makeButton:kEqPresetNames[i]
@@ -857,8 +862,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     y = [self addSlider:S_EQLO to:tabEq y:y];
     y = [self addSlider:S_EQMID to:tabEq y:y];
     y = [self addSlider:S_EQHI to:tabEq y:y];
-    y = [self addHint:@"الحدّين يقسمون الصدى لثلاث نطاقات: جهير (تحت حد الجهير)، وسط، حاد (فوق حد الحاد).\n٠٪ يكتم النطاق و٢٠٠٪ يضاعفه.\n«شيل موجة الذيل» يخفف التموّج ويغمّق الذيل ويخفض الحاد."
-                   to:tabEq y:y height:62];
     tabEq.contentSize = CGSizeMake(kPanelW, y + 10);
 
     // ================= تبويب النبرة =================
@@ -874,7 +877,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
         CGRect f = CGRectMake(16 + col * (pbw + 8), 76 + row * 42, pbw, 34);
         [tabPitch addSubview:[self makeButton:names[i] frame:f tag:i action:@selector(presetTapped:)]];
     }
-    [self addHint:@"حرّك الشريط أو اختر نمط جاهز.\nروبوت = صوت معدني، وعشوائي = مفاجأة" to:tabPitch y:164 height:40];
+    [self addHint:@"حرّك الشريط أو اختر نمط جاهز." to:tabPitch y:164 height:40];
     tabPitch.contentSize = CGSizeMake(kPanelW, 230);
 
     // ================= تبويب المضخّم =================
@@ -903,7 +906,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     y += 20;
 
     self.micStatus = [self makeLabelAt:CGRectMake(16, y, w, 20) size:13 bold:YES alpha:0.9];
-    self.micStatus.text = @"🔴 المايك مو شغال. ادخل روم صوتي وافتح المايك";
+    self.micStatus.text = @"🔴 المايك مو شغال";
     self.micStatus.textColor = [UIColor systemOrangeColor];
     [tabAmp addSubview:self.micStatus];
     y += 32;
@@ -917,11 +920,9 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [tabAmp addSubview:self.monWarn];
     y += 40;
 
-    y = [self addHint:@"تكلّم وشوف الشريط. المضخّم يرفع صوتك لين ×16 مع حد ناعم يمنع التقطع. لو الشريط صار أحمر دايم، خفّض التضخيم.\n«أسمع صوتي» يوصّل لسماعتك نفس صوتك اللي يسمعونه (مع الصدى والنبرة) بتأخير بسيط. يشتغل بس لما المايك شغال في ديسكورد: داخل روم صوتي وغير مكتوم. استخدم سماعات."
-                   to:tabAmp y:y height:104];
     tabAmp.contentSize = CGSizeMake(kPanelW, y + 10);
 
-    // ================= تبويب الأغاني (المتصفح والملفات فقط) =================
+    // ================= تبويب الأغاني =================
     self.songLabel = [self makeLabelAt:CGRectMake(16, 4, w, 34) size:13 bold:YES alpha:1];
     self.songLabel.text = @"ما فيه أغنية. افتح المتصفح أو اختر ملف من جهازك";
     [tabMusic addSubview:self.songLabel];
@@ -952,15 +953,15 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self addToggle:T_SONGECHO to:tabMusic x:16 y:y width:w]; y += 36;
     [self addToggle:T_MONITOR  to:tabMusic x:16 y:y width:w]; y += 40;
     y = [self addSlider:S_MONVOL to:tabMusic y:y];
-    y = [self addHint:@"اللي معك في ديسكورد يسمعون الأغنية من مايكك مع الصدى.\n«أنا أسمع الأغنية» توصّلها لسماعتك أنت. الأفضل تستخدم سماعات، وإلا المايك يلتقطها من السبيكر ويدخل صدى زيادة.\n🌐 المتصفح: فيه نافذة YouTube ونافة Y2Mate جاهزة لتحميل المقاطع وتشغيلها."
-                   to:tabMusic y:y height:92];
+    y = [self addHint:@"🌐 المتصفح: يحتوي على نافذة يوتيوب و Y2Mate لتحميل وتشغيل المقاطع."
+                   to:tabMusic y:y height:60];
     tabMusic.contentSize = CGSizeMake(kPanelW, y + 10);
 
     [self refreshModeButtons];
     [self updatePitchLabel];
 }
 
-#pragma mark - تحديث النصوص
+#pragma mark - تحديث النصوص والأحداث
 
 - (void)updateSpecLabel:(int)idx {
     const SliderSpec *sp = &kSliders[idx];
@@ -975,8 +976,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     if (self.robot) t = [t stringByAppendingString:@"  ·  🤖 روبوت"];
     self.pitchLabel.text = t;
 }
-
-#pragma mark - الأحداث
 
 - (void)tabChanged:(UISegmentedControl *)sender {
     for (NSUInteger i = 0; i < self.tabViews.count; i++)
@@ -1081,7 +1080,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 
 - (void)gainQuick:(UIButton *)b { [self setSpec:S_GAIN to:(int)b.tag]; }
 
-// ----- الأغاني -----
 - (void)chooseSong {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -1160,7 +1158,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     self.seeking = NO;
 }
 
-#pragma mark - مؤقت (مقياس المايك + تقدّم الأغنية)
+#pragma mark - مؤقت
 
 - (void)startTimer {
     if (self.timer) return;
@@ -1180,10 +1178,10 @@ static BOOL EchoIsAudioExt(NSString *ext) {
             NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
             if (c != s.lastRender) { s.lastRender = c; s.lastRenderTime = now; }
             BOOL live = (c != 0) && (now - s.lastRenderTime) < 0.6;
-            s.micStatus.text = live ? @"🟢 المايك شغال" : @"🔴 المايك مو شغال. ادخل روم صوتي وافتح المايك";
+            s.micStatus.text = live ? @"🟢 المايك شغال" : @"🔴 المايك مو شغال";
             s.micStatus.textColor = live ? [UIColor systemGreenColor] : [UIColor systemOrangeColor];
             BOOL selfOn = s->_sw[T_SELFMON].on;
-            s.monWarn.text = (selfOn && !echo_headphones()) ? @"⚠️ وصّل سماعات، وإلا صوتك يرجع للمايك ويصير صفير" : @"";
+            s.monWarn.text = (selfOn && !echo_headphones()) ? @"⚠️ وصّل سماعات لمنع الصفير" : @"";
         } else if (tab == TAB_MUSIC) {
             [s refreshMusicUI];
         }
