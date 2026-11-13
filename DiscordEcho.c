@@ -1,12 +1,12 @@
 // DiscordEcho: معالج صوت المايك داخل تطبيق (مثل ديسكورد)
 //   - تغيير النبرة (pitch) من -12 إلى +12 نغمة + صوت روبوت
-//   - صدى: كهف (reverb ممتد) + تكرار (الو الو الو)، يشتغلون مع بعض أو لحالهم
-//       شدة 0..100، مضخّم الصدى 100%..400%، مدى الصدى 0..100
-//   - تضخيم الصوت من 100% إلى 800% مع حد ناعم يمنع التقطع
-//   - مشغّل أغنية: تتمزج داخل المايك فيسمعها اللي معك في الكول
-//   - قياس مستوى المايك للعرض في القائمة
+//   - صدى "كهف مسكون": تكرار مبعثر (Multi-Tap Delay) + كهف (reverb) مع تحكم كامل:
+//       شدة عامة، مضخّم، مدى، شدة الكهف، شدة التكرار، سرعة/تشتيت/عدد التكرارات
+//   - موازن ترددات (EQ) للصدى + تغميق الذيل + تنعيم الموجة (modulation)
+//   - مودات صدى جاهزة، كل واحد لحاله: ديلاي، ديلاي شريط، غرفة، قاعة، ستاديوم، فضاء
+//   - تضخيم الصوت 100%..800% مع حد ناعم
+//   - مشغّل أغنية: تتمزج داخل المايك + يطبّق عليها الصدى + تقدر تسمعها أنت (مراقبة)
 // يعمل عبر fishhook: يستبدل AudioUnitRender ويعدّل بيانات المايك قبل ما يرسلها التطبيق.
-// الترتيب: نبرة -> روبوت -> صدى -> تضخيم -> (+ الأغنية).
 
 #include <AudioToolbox/AudioToolbox.h>
 #include <stdint.h>
@@ -17,28 +17,64 @@
 
 #define MAX_RATE 48000
 #define MAX_BUFS 2
-#define LINE_LEN (MAX_RATE * 2)
+#define LINE_LEN (MAX_RATE * 4)
 #define MUSIC_TMP 8192
+#define NCTX (MAX_BUFS + 1)      // قناتين للمايك + واحد للأغنية
+#define SONG_CTX MAX_BUFS
 
 // ---------- إعدادات تتغير من القائمة ----------
-static volatile int   g_level = 50;    // شدة الصدى 0..100
-static volatile int   g_boost = 100;   // مضخّم الصدى 100..400 (%)
-static volatile int   g_range = 60;    // مدى الصدى 0..100
-static volatile int   g_cave  = 1;     // كهف
-static volatile int   g_repeat = 1;    // تكرار
-static volatile int   g_gain  = 100;   // تضخيم الصوت 100..800 (%)
-static volatile int   g_pitch = 0;     // نغمات -12..12
-static volatile int   g_robot = 0;     // 0/1
-static volatile int   g_voice_mute = 0;// كتم صوتي أثناء الأغنية
-static volatile float g_peak  = 0.0f;  // مستوى المايك 0..1
+static volatile int   g_level = 50;     // شدة الصدى 0..100
+static volatile int   g_boost = 100;    // مضخّم الصدى 100..400 (%)
+static volatile int   g_range = 60;     // مدى الصدى 0..100
+static volatile int   g_cave  = 1;      // كهف
+static volatile int   g_repeat = 1;     // تكرار
+static volatile int   g_cave_amt = 100; // شدة الكهف 0..100
+static volatile int   g_rep_amt = 100;  // شدة التكرار 0..100
+static volatile int   g_tap_speed = 100;// سرعة/تردد التكرار 50..300 (%)  (أكبر = أبطأ وأبعد)
+static volatile int   g_tap_fb = 60;    // عدد التكرارات 0..100
+static volatile int   g_tap_scatter = 100; // التبعثر 0..100 (0 = منتظم، 100 = مبعثر زي الكرت)
+static volatile int   g_damp = 40;      // تغميق الذيل 0..100
+static volatile int   g_mod = 50;       // تنعيم الموجة 0..100
+static volatile int   g_eq_lo_f = 200;  // تردد حد الجهير (Hz)
+static volatile int   g_eq_hi_f = 3500; // تردد حد الحاد (Hz)
+static volatile int   g_eq_lo = 100;    // قوة الجهير 0..200 (%)
+static volatile int   g_eq_mid = 100;   // قوة الوسط 0..200 (%)
+static volatile int   g_eq_hi = 100;    // قوة الحاد 0..200 (%)
+static volatile int   g_mode = 0;       // 0 = كهف مسكون (حسب الأزرار)، 1..6 = مودات جاهزة
+static volatile int   g_song_echo = 1;  // تطبيق الصدى على الأغنية
+static volatile int   g_monitor = 0;    // أنت تسمع الأغنية
+static volatile int   g_mon_vol = 100;  // مستوى المراقبة 0..200
+static volatile int   g_gain  = 100;    // تضخيم الصوت 100..800 (%)
+static volatile int   g_pitch = 0;      // نغمات -12..12
+static volatile int   g_robot = 0;      // 0/1
+static volatile int   g_voice_mute = 0; // كتم صوتي أثناء الأغنية
+static volatile float g_peak  = 0.0f;   // مستوى المايك 0..1
 
-void DiscordEcho_SetLevel(int v)  { g_level = v < 0 ? 0 : (v > 100 ? 100 : v); }
-void DiscordEcho_SetEchoBoost(int v) { g_boost = v < 100 ? 100 : (v > 400 ? 400 : v); }
-void DiscordEcho_SetRange(int v)  { g_range = v < 0 ? 0 : (v > 100 ? 100 : v); }
+static int clampi(int v, int a, int b) { return v < a ? a : (v > b ? b : v); }
+
+void DiscordEcho_SetLevel(int v)  { g_level = clampi(v, 0, 100); }
+void DiscordEcho_SetEchoBoost(int v) { g_boost = clampi(v, 100, 400); }
+void DiscordEcho_SetRange(int v)  { g_range = clampi(v, 0, 100); }
 void DiscordEcho_SetCave(int on)  { g_cave = on ? 1 : 0; }
 void DiscordEcho_SetRepeat(int on){ g_repeat = on ? 1 : 0; }
-void DiscordEcho_SetGain(int v)   { g_gain = v < 100 ? 100 : (v > 800 ? 800 : v); }
-void DiscordEcho_SetPitch(int v)  { g_pitch = v < -12 ? -12 : (v > 12 ? 12 : v); }
+void DiscordEcho_SetCaveAmount(int v) { g_cave_amt = clampi(v, 0, 100); }
+void DiscordEcho_SetRepeatAmount(int v) { g_rep_amt = clampi(v, 0, 100); }
+void DiscordEcho_SetTapSpeed(int v) { g_tap_speed = clampi(v, 50, 300); }
+void DiscordEcho_SetTapFeedback(int v) { g_tap_fb = clampi(v, 0, 100); }
+void DiscordEcho_SetTapScatter(int v) { g_tap_scatter = clampi(v, 0, 100); }
+void DiscordEcho_SetDamp(int v)   { g_damp = clampi(v, 0, 100); }
+void DiscordEcho_SetMod(int v)    { g_mod = clampi(v, 0, 100); }
+void DiscordEcho_SetEqLoFreq(int v) { g_eq_lo_f = clampi(v, 60, 800); }
+void DiscordEcho_SetEqHiFreq(int v) { g_eq_hi_f = clampi(v, 1500, 9000); }
+void DiscordEcho_SetEqLo(int v)   { g_eq_lo = clampi(v, 0, 200); }
+void DiscordEcho_SetEqMid(int v)  { g_eq_mid = clampi(v, 0, 200); }
+void DiscordEcho_SetEqHi(int v)   { g_eq_hi = clampi(v, 0, 200); }
+void DiscordEcho_SetMode(int v)   { g_mode = clampi(v, 0, 6); }
+void DiscordEcho_SetSongEcho(int on) { g_song_echo = on ? 1 : 0; }
+void DiscordEcho_SetMonitor(int on) { g_monitor = on ? 1 : 0; }
+void DiscordEcho_SetMonitorVolume(int v) { g_mon_vol = clampi(v, 0, 200); }
+void DiscordEcho_SetGain(int v)   { g_gain = clampi(v, 100, 800); }
+void DiscordEcho_SetPitch(int v)  { g_pitch = clampi(v, -12, 12); }
 void DiscordEcho_SetRobot(int on) { g_robot = on ? 1 : 0; }
 void DiscordEcho_SetVoiceMute(int on) { g_voice_mute = on ? 1 : 0; }
 float DiscordEcho_GetPeak(void)   { return g_peak; }
@@ -51,57 +87,230 @@ static float soft_limit(float y) {
     return y < 0 ? -s : s;
 }
 
-// ---------- التكرار (delay مع feedback) ----------
-#define REP_GAIN 1.2f
-static float g_line[MAX_BUFS][LINE_LEN];
-static size_t g_pos[MAX_BUFS];
-static int g_cleared[MAX_BUFS];
-
-// ---------- كهف (reverb): 8 مرشحات comb متوازية + 4 allpass متسلسلة ----------
+// ---------- كهف (reverb): 8 مرشحات comb + 4 allpass، مع تموّج بسيط يكسر الرنين ----------
 #define RV_COMBS    8
 #define RV_APS      4
-#define RV_COMB_MAX 8192
+#define RV_COMB_MAX 16384   // لازم يكون من مضاعفات 2
 #define RV_AP_MAX   2048
-#define RV_DAMP     0.40f   // تغميق الذيل (أكبر = أغمق)
-#define RV_WET      3.0f
 
 typedef struct {
     float comb[RV_COMBS][RV_COMB_MAX];
     float damp[RV_COMBS];
     unsigned cpos[RV_COMBS];
+    float lph[RV_COMBS];
+    int inited;
     float ap[RV_APS][RV_AP_MAX];
     unsigned apos[RV_APS];
 } Reverb;
 
-static Reverb g_rv[MAX_BUFS];
 static const int kCombBase[RV_COMBS] = {1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617};
 static const int kApBase[RV_APS] = {556, 441, 341, 225};
 
-static float rv_process(Reverb *rv, float x, float fb, const int *clen, const int *alen) {
+// ---------- بارامترات الصدى (تتحسب مرة لكل دفعة) ----------
+typedef struct {
+    int kind;                 // 0 = كهف+تكرار مبعثر، 1 = ديلاي بسيط، 2 = ريفيرب فقط
+    int rep, cave, tape;
+    size_t tapD[8];
+    float tapG[8];
+    float fbk;
+    float rep_gain;
+    size_t dD;
+    float d_fb, d_gain;
+    int clen[RV_COMBS], alen[RV_APS];
+    float cave_fb, damp, cave_wet;
+    float mod_depth;
+    float lfo_inc[RV_COMBS];
+    float eq_a1, eq_a2, eq_gl, eq_gm, eq_gh;
+    float wet_gain;
+} EchoParams;
+
+typedef struct {
+    float line[LINE_LEN];
+    size_t pos;
+    float tape;
+    float eq_lo, eq_lp2;
+    Reverb rv;
+} EchoCtx;
+
+static EchoCtx g_ctx[NCTX];
+static int g_cleared[NCTX];
+
+static float rv_process(Reverb *rv, float x, const EchoParams *P) {
     float in = x * 0.015f;
     float acc = 0.0f;
+    if (!rv->inited) {
+        for (int c = 0; c < RV_COMBS; c++) rv->lph[c] = 0.8f * (float)c;
+        rv->inited = 1;
+    }
     for (int c = 0; c < RV_COMBS; c++) {
-        unsigned p = rv->cpos[c];
-        if (p >= (unsigned)clen[c]) p = 0;
-        float out = rv->comb[c][p];
-        rv->damp[c] = out * (1.0f - RV_DAMP) + rv->damp[c] * RV_DAMP;
-        rv->comb[c][p] = in + rv->damp[c] * fb;
-        if (++p >= (unsigned)clen[c]) p = 0;
-        rv->cpos[c] = p;
+        unsigned w = rv->cpos[c] & (RV_COMB_MAX - 1);
+        float dly = (float)P->clen[c];
+        if (P->mod_depth > 0.0f) {
+            rv->lph[c] += P->lfo_inc[c];
+            if (rv->lph[c] > 6.2831853f) rv->lph[c] -= 6.2831853f;
+            dly += P->mod_depth * sinf(rv->lph[c]);
+        }
+        float rpos = (float)w - dly;
+        if (rpos < 0.0f) rpos += (float)RV_COMB_MAX;
+        unsigned i0 = (unsigned)rpos;
+        float fr = rpos - (float)i0;
+        float a = rv->comb[c][i0 & (RV_COMB_MAX - 1)];
+        float b = rv->comb[c][(i0 + 1u) & (RV_COMB_MAX - 1)];
+        float out = a + fr * (b - a);
+        rv->damp[c] = out * (1.0f - P->damp) + rv->damp[c] * P->damp;
+        rv->comb[c][w] = in + rv->damp[c] * P->cave_fb;
+        rv->cpos[c] = (w + 1u) & (RV_COMB_MAX - 1);
         acc += out;
     }
     for (int a = 0; a < RV_APS; a++) {
         unsigned p = rv->apos[a];
-        if (p >= (unsigned)alen[a]) p = 0;
+        if (p >= (unsigned)P->alen[a]) p = 0;
         float b = rv->ap[a][p];
         float out = b - acc;
         rv->ap[a][p] = acc + b * 0.5f;
-        if (++p >= (unsigned)alen[a]) p = 0;
+        if (++p >= (unsigned)P->alen[a]) p = 0;
         rv->apos[a] = p;
         acc = out;
     }
     return acc;
 }
+
+static void echo_params(EchoParams *P, float rate, UInt32 chans) {
+    memset(P, 0, sizeof(*P));
+    int lvl = g_level, mode = g_mode;
+    float r = (float)g_range / 100.0f;
+    float ch = (float)chans;
+    float rs = rate / 44100.0f;
+
+    P->rep = g_repeat;
+    P->cave = g_cave;
+    P->wet_gain = ((float)lvl / 100.0f) * ((float)g_boost / 100.0f);
+
+    // ----- مودات جاهزة -----
+    float size = 1.4f + 1.8f * r;
+    float fb = 0.84f + 0.14f * r;
+    float cwet = 3.0f * (float)g_cave_amt / 100.0f;
+    P->kind = 0;
+    if (mode == 1 || mode == 2) {
+        P->kind = 1;
+        P->tape = (mode == 2);
+    } else if (mode >= 3) {
+        static const float kSize[7] = {0, 0, 0, 0.45f, 1.2f, 2.4f, 3.2f};
+        static const float kFb[7]   = {0, 0, 0, 0.76f, 0.90f, 0.955f, 0.975f};
+        static const float kWet[7]  = {0, 0, 0, 2.2f, 2.8f, 3.0f, 3.0f};
+        P->kind = 2;
+        size = kSize[mode] * (0.8f + 0.4f * r);
+        fb = kFb[mode] + (r - 0.6f) * 0.04f;
+        cwet = kWet[mode];
+    }
+    if (fb > 0.985f) fb = 0.985f;
+    P->cave_fb = fb;
+    P->cave_wet = cwet;
+
+    // ----- ريفيرب -----
+    float dampc = 0.05f + 0.0085f * (float)g_damp;   // 0.05 .. 0.90
+    P->damp = dampc;
+    for (int c = 0; c < RV_COMBS; c++) {
+        int L = (int)((float)kCombBase[c] * rs * size) * (int)chans;
+        if (L < 8) L = 8;
+        if (L > RV_COMB_MAX - 160) L = RV_COMB_MAX - 160;
+        P->clen[c] = L;
+    }
+    for (int a = 0; a < RV_APS; a++) {
+        int L = (int)((float)kApBase[a] * rs) * (int)chans;
+        P->alen[a] = L < 1 ? 1 : (L >= RV_AP_MAX ? RV_AP_MAX - 1 : L);
+    }
+    P->mod_depth = (float)g_mod / 100.0f * 24.0f * ch;
+    for (int c = 0; c < RV_COMBS; c++) {
+        float hz = 0.35f + 0.17f * (float)c;
+        P->lfo_inc[c] = 6.2831853f * hz / (rate * ch);
+    }
+
+    // ----- تكرار مبعثر (Multi-Tap): أزمنة غير منتظمة مثل كرت EAX -----
+    static const float kTapT[8] = {0.020f, 0.062f, 0.0925f, 0.1305f, 0.160f, 0.178f, 0.3044f, 0.3715f};
+    static const float kTapG[8] = {0.55f, 0.50f, 0.50f, 0.70f, 0.60f, 0.50f, 0.55f, 0.45f};
+    float sc = (float)g_tap_scatter / 100.0f;
+    float tscale = ((float)g_tap_speed / 100.0f) * (0.8f + 0.8f * r);
+    for (int k = 0; k < 8; k++) {
+        float reg = 0.0465f * (float)(k + 1);          // منتظم
+        float t = (kTapT[k] * sc + reg * (1.0f - sc)) * tscale;
+        size_t d = (size_t)(t * rate) * chans;
+        if (d < 1) d = 1;
+        if (d >= LINE_LEN) d = LINE_LEN - 1;
+        P->tapD[k] = d;
+        P->tapG[k] = kTapG[k];
+    }
+    float tf = (float)g_tap_fb / 100.0f;
+    float fbk = 0.25f + 0.70f * tf + 0.03f * r;        // أقصى 0.98
+    if (fbk > 0.98f) fbk = 0.98f;
+    P->fbk = fbk;
+    P->rep_gain = 1.2f * 0.45f * (float)g_rep_amt / 100.0f;
+
+    // ----- ديلاي بسيط / شريط -----
+    {
+        float t = 0.30f * ((float)g_tap_speed / 100.0f) * (0.7f + 0.6f * r);
+        size_t d = (size_t)(t * rate) * chans;
+        if (d < 1) d = 1;
+        if (d >= LINE_LEN) d = LINE_LEN - 1;
+        P->dD = d;
+        P->d_fb = 0.25f + 0.65f * tf;
+        P->d_gain = 1.0f;
+    }
+
+    // ----- موازن ترددات على الصدى -----
+    float fs = rate * ch;
+    float flo = (float)g_eq_lo_f, fhi = (float)g_eq_hi_f;
+    if (fhi < flo * 1.5f) fhi = flo * 1.5f;
+    P->eq_a1 = 1.0f - expf(-6.2831853f * flo / fs);
+    P->eq_a2 = 1.0f - expf(-6.2831853f * fhi / fs);
+    P->eq_gl = (float)g_eq_lo / 100.0f;
+    P->eq_gm = (float)g_eq_mid / 100.0f;
+    P->eq_gh = (float)g_eq_hi / 100.0f;
+}
+
+static float echo_run(EchoCtx *c, float y, const EchoParams *P) {
+    float wet = 0.0f;
+    if (P->kind == 0) {
+        float rin = y;
+        if (P->rep) {
+            size_t p = c->pos;
+            if (p >= LINE_LEN) p = 0;
+            float dsum = 0.0f;
+            float q[8];
+            for (int k = 0; k < 8; k++) {
+                size_t i = p >= P->tapD[k] ? p - P->tapD[k] : p + LINE_LEN - P->tapD[k];
+                q[k] = c->line[i];
+                dsum += q[k] * P->tapG[k];
+            }
+            c->line[p] = y + P->fbk * (0.38f * q[4] + 0.33f * q[6] + 0.29f * q[7]);
+            wet += dsum * P->rep_gain;
+            rin = y + 0.3f * dsum;               // الكهف يسمع التكرارات كمان
+            if (++p >= LINE_LEN) p = 0;
+            c->pos = p;
+        }
+        if (P->cave) wet += rv_process(&c->rv, rin, P) * P->cave_wet;
+    } else if (P->kind == 1) {
+        size_t p = c->pos;
+        if (p >= LINE_LEN) p = 0;
+        size_t i = p >= P->dD ? p - P->dD : p + LINE_LEN - P->dD;
+        float d = c->line[i];
+        float fbin = d;
+        if (P->tape) { c->tape += 0.35f * (d - c->tape); fbin = c->tape; }
+        c->line[p] = y + P->d_fb * fbin;
+        wet += d * P->d_gain;
+        if (++p >= LINE_LEN) p = 0;
+        c->pos = p;
+    } else {
+        wet += rv_process(&c->rv, y, P) * P->cave_wet;
+    }
+    // موازن الترددات
+    c->eq_lo  += P->eq_a1 * (wet - c->eq_lo);
+    c->eq_lp2 += P->eq_a2 * (wet - c->eq_lp2);
+    float lo = c->eq_lo, lp2 = c->eq_lp2;
+    return lo * P->eq_gl + (lp2 - lo) * P->eq_gm + (wet - lp2) * P->eq_gh;
+}
+
+static void clear_ctx(int idx) { memset(&g_ctx[idx], 0, sizeof(g_ctx[idx])); }
 
 // ---------- مغيّر النبرة (خط تأخير بنافذتين متداخلتين) ----------
 #define PS_WIN 2048
@@ -150,6 +359,7 @@ static volatile int    g_mvol = 100;     // 0..200 (%)
 static volatile double g_mpos = 0.0;     // موضع التشغيل بالعينات
 static volatile double g_mseek = -1.0;   // طلب قفز (-1 = ما فيه)
 static float g_mtmp[MUSIC_TMP];
+static float g_sout[MUSIC_TMP];
 
 // تأخذ ملكية المصفوفة (malloc). تتحرر لما تتحمّل أغنية ثانية.
 int DiscordEcho_MusicLoad(float *samples, size_t count) {
@@ -174,7 +384,7 @@ void DiscordEcho_MusicSeek(float frac) {
     if (frac > 1.0f) frac = 1.0f;
     g_mseek = (double)frac * (double)g_mslot[cur].len;
 }
-void DiscordEcho_MusicSetVolume(int pct) { g_mvol = pct < 0 ? 0 : (pct > 200 ? 200 : pct); }
+void DiscordEcho_MusicSetVolume(int pct) { g_mvol = clampi(pct, 0, 200); }
 void DiscordEcho_MusicSetLoop(int on) { g_mloop = on ? 1 : 0; }
 int  DiscordEcho_MusicIsPlaying(void) { return g_mplaying; }
 float DiscordEcho_MusicProgress(void) {
@@ -228,10 +438,50 @@ static int music_generate(float *out, UInt32 frames, float rate) {
     return 1;
 }
 
+// ---------- مراقبة: تسمع الأغنية (مع الصدى) بنفسك ----------
+#define MON_LEN (1 << 17)   // لازم يكون من مضاعفات 2
+static float g_mon[MON_LEN];
+static volatile unsigned g_mon_w = 0, g_mon_r = 0;
+static volatile float g_mon_rate = 48000.0f;
+static double g_mon_frac = 0.0;
+
+static void mon_write(const float *src, UInt32 frames, float rate, float vol) {
+    g_mon_rate = rate;
+    unsigned w = g_mon_w;
+    for (UInt32 i = 0; i < frames; i++) {
+        g_mon[w & (MON_LEN - 1)] = src ? src[i] * vol : 0.0f;
+        w++;
+    }
+    __sync_synchronize();
+    g_mon_w = w;
+}
+
+// يستدعيها مشغّل المراقبة (خيط الصوت). تعبّي out بعدد n عينة بمعدل outRate.
+void DiscordEcho_MonitorRead(float *out, unsigned n, double outRate) {
+    double step = (double)g_mon_rate / (outRate > 1000.0 ? outRate : 48000.0);
+    unsigned w = g_mon_w, r = g_mon_r;
+    unsigned avail = w - r;
+    // لو متأخر كثير، نرجع قريب من الحاضر
+    unsigned maxLag = (unsigned)(g_mon_rate * 0.5f);
+    if (avail > maxLag) { r = w - (unsigned)(g_mon_rate * 0.1f); avail = w - r; g_mon_frac = 0.0; }
+    for (unsigned i = 0; i < n; i++) {
+        if (avail < 3) { out[i] = 0.0f; continue; }
+        float a = g_mon[r & (MON_LEN - 1)];
+        float b = g_mon[(r + 1) & (MON_LEN - 1)];
+        out[i] = a + (float)g_mon_frac * (b - a);
+        g_mon_frac += step;
+        while (g_mon_frac >= 1.0) { g_mon_frac -= 1.0; r++; avail--; if (avail < 3) break; }
+    }
+    __sync_synchronize();
+    g_mon_r = r;
+}
+
 // ---------- الهوك ----------
 static AudioUnit g_unit;
 static AudioStreamBasicDescription g_fmt;
 static int g_have_fmt;
+static int g_song_cleared = 1;
+static float g_stail = 0.0f;
 
 static OSStatus (*orig_render)(AudioUnit, AudioUnitRenderActionFlags *,
                                const AudioTimeStamp *, UInt32, UInt32,
@@ -242,10 +492,8 @@ static void update_peak(float pk) {
     g_peak = pk > prev ? pk : prev;
 }
 
-static void clear_state(int idx) {
-    memset(&g_rv[idx], 0, sizeof(g_rv[idx]));
-    memset(g_line[idx], 0, sizeof(g_line[idx]));
-    g_pos[idx] = 0;
+static int echo_enabled(void) {
+    return g_level > 0 && (g_mode > 0 || g_cave || g_repeat);
 }
 
 static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mus_frames) {
@@ -257,12 +505,10 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
     size_t n = ab->mDataByteSize / bytes_per;
     UInt32 chans = ab->mNumberChannels ? ab->mNumberChannels : 1;
 
-    int lvl = g_level;
     int gn = g_gain;
     int semis = g_pitch;
-    int cave = g_cave, rep = g_repeat;
 
-    int echo_on = lvl > 0 && (cave || rep);
+    int echo_on = echo_enabled();
     int ps_on = (semis != 0) && chans == 1;     // النبرة والروبوت للمايك الأحادي فقط
     int robot_on = g_robot && chans == 1;
     int mute = g_voice_mute && mus != NULL;
@@ -278,13 +524,13 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
             if (a > pk) pk = a;
         }
         update_peak(pk);
-        if (!g_cleared[idx]) { clear_state(idx); g_cleared[idx] = 1; }
+        if (!g_cleared[idx]) { clear_ctx(idx); g_cleared[idx] = 1; }
         g_ps_on[idx] = 0;
         return;
     }
 
     if (!echo_on) {
-        if (!g_cleared[idx]) { clear_state(idx); g_cleared[idx] = 1; }
+        if (!g_cleared[idx]) { clear_ctx(idx); g_cleared[idx] = 1; }
     } else {
         g_cleared[idx] = 0;
     }
@@ -299,45 +545,13 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
     float rate = (float)g_fmt.mSampleRate;
     if (rate < 8000.0f) rate = 48000.0f;
 
-    // ----- بارامترات الصدى من "المدى" -----
-    float r = (float)g_range / 100.0f;
-    float cave_fb   = 0.84f + 0.12f * r;      // طول ذيل الكهف
-    float cave_size = 1.4f + 0.8f * r;        // حجم الكهف
-    float wet_gain  = ((float)lvl / 100.0f) * ((float)g_boost / 100.0f);
-
     float gain = (float)gn / 100.0f;
     float ratio = powf(2.0f, (float)semis / 12.0f);
     float rstep = 6.2831853f * 70.0f / rate;
 
-    // ----- تكرار مبعثر (طاقات بأزمنة غير منتظمة مثل كرت EAX) -----
-    // أزمنة بالثواني: مبكرة، ثم عائلة ~130-178ms، ثم ~300-372ms
-    static const float kTapT[8] = {0.020f, 0.062f, 0.0925f, 0.1305f, 0.160f, 0.178f, 0.3044f, 0.3715f};
-    static const float kTapG[8] = {0.55f, 0.50f, 0.50f, 0.70f, 0.60f, 0.50f, 0.55f, 0.45f};
-    float tscale = 0.8f + 0.8f * r;                 // المدى يمدد الأزمنة
-    size_t tapD[8];
-    for (int k = 0; k < 8; k++) {
-        size_t d = (size_t)(kTapT[k] * tscale * rate) * chans;
-        if (d < 1) d = 1;
-        if (d >= LINE_LEN) d = LINE_LEN - 1;
-        tapD[k] = d;
-    }
-    // تغذية راجعة من ثلاث طاقات غير متناسقة (مجموعها < 0.9 للثبات)
-    float fbk = 0.55f + 0.33f * r;                  // 0.55..0.88
-    float *line = g_line[idx];
-    size_t p = g_pos[idx];
-    if (p >= LINE_LEN) p = 0;
-
-    Reverb *rv = &g_rv[idx];
-    int clen[RV_COMBS], alen[RV_APS];
-    float rs = rate / 44100.0f;
-    for (int c = 0; c < RV_COMBS; c++) {
-        int L = (int)((float)kCombBase[c] * rs * cave_size) * (int)chans;
-        clen[c] = L < 1 ? 1 : (L >= RV_COMB_MAX ? RV_COMB_MAX - 1 : L);
-    }
-    for (int a = 0; a < RV_APS; a++) {
-        int L = (int)((float)kApBase[a] * rs) * (int)chans;
-        alen[a] = L < 1 ? 1 : (L >= RV_AP_MAX ? RV_AP_MAX - 1 : L);
-    }
+    EchoParams P;
+    if (echo_on) echo_params(&P, rate, chans);
+    EchoCtx *ctx = &g_ctx[idx];
 
     float pk = 0.0f;
     UInt32 ch = 0;
@@ -355,28 +569,7 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
             if (g_robot_phase > 6.2831853f) g_robot_phase -= 6.2831853f;
         }
 
-        if (echo_on) {
-            float wet = 0.0f;
-            float rin = y;
-            if (rep) {
-                float dsum = 0.0f;
-                for (int k = 0; k < 8; k++) {
-                    size_t q = p >= tapD[k] ? p - tapD[k] : p + LINE_LEN - tapD[k];
-                    dsum += line[q] * kTapG[k];
-                }
-                size_t q4 = p >= tapD[4] ? p - tapD[4] : p + LINE_LEN - tapD[4];
-                size_t q6 = p >= tapD[6] ? p - tapD[6] : p + LINE_LEN - tapD[6];
-                size_t q7 = p >= tapD[7] ? p - tapD[7] : p + LINE_LEN - tapD[7];
-                line[p] = y + fbk * (0.34f * line[q4] + 0.30f * line[q6] + 0.26f * line[q7]);
-                wet += dsum * REP_GAIN * 0.45f;
-                rin = y + 0.3f * dsum;         // الكهف يسمع التكرارات كمان
-                if (++p >= LINE_LEN) p = 0;
-            }
-            if (cave) {
-                wet += rv_process(rv, rin, cave_fb, clen, alen) * RV_WET;
-            }
-            y = y + wet * wet_gain;
-        }
+        if (echo_on) y = y + echo_run(ctx, y, &P) * P.wet_gain;
 
         y = soft_limit(y * gain);
 
@@ -390,7 +583,6 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
 
         if (++ch >= chans) { ch = 0; fi++; }
     }
-    if (echo_on) g_pos[idx] = p;
     update_peak(pk);
 }
 
@@ -412,10 +604,41 @@ static OSStatus my_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
         }
     }
 
-    int mus_on = music_generate(g_mtmp, frames, (float)g_fmt.mSampleRate);
+    float rate = (float)g_fmt.mSampleRate;
+    if (rate < 8000.0f) rate = 48000.0f;
+
+    // ----- الأغنية: تمر على صدى خاص فيها، وبعدين تنزل للمايك وللمراقبة -----
+    int mus_on = music_generate(g_mtmp, frames, rate);
+    int have_song = 0;
+    if (frames <= MUSIC_TMP) {
+        int s_echo = echo_enabled() && g_song_echo;
+        if (mus_on) g_stail = 8.0f * rate;
+        if (!s_echo) g_stail = mus_on ? g_stail : 0.0f;
+        if (mus_on || g_stail > 0.0f) {
+            if (s_echo) {
+                EchoParams SP;
+                echo_params(&SP, rate, 1);
+                EchoCtx *sc = &g_ctx[SONG_CTX];
+                g_song_cleared = 0;
+                for (UInt32 i = 0; i < frames; i++) {
+                    float s = mus_on ? g_mtmp[i] : 0.0f;
+                    g_sout[i] = soft_limit(s + echo_run(sc, s, &SP) * SP.wet_gain);
+                }
+            } else {
+                for (UInt32 i = 0; i < frames; i++) g_sout[i] = mus_on ? g_mtmp[i] : 0.0f;
+            }
+            if (!mus_on) g_stail -= (float)frames;
+            have_song = 1;
+        } else if (!g_song_cleared) {
+            clear_ctx(SONG_CTX);
+            g_song_cleared = 1;
+        }
+        if (g_monitor) mon_write(have_song ? g_sout : NULL, frames, rate, (float)g_mon_vol / 100.0f);
+    }
+
     for (UInt32 b = 0; b < io->mNumberBuffers && b < MAX_BUFS; b++) {
         if (io->mBuffers[b].mData)
-            process_buffer((int)b, &io->mBuffers[b], mus_on ? g_mtmp : NULL, frames);
+            process_buffer((int)b, &io->mBuffers[b], have_song ? g_sout : NULL, frames);
     }
     return st;
 }
