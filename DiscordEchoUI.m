@@ -1,4 +1,4 @@
-// DiscordEchoUI: نافذتين (متصفح يوتيوب مستقل + محول روابط MP3 مباشر)
+// DiscordEchoUI: الكود المصحح لتجاوز خطأ التوثيق والتحميل
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -286,7 +286,7 @@ static NSString *EchoTime(float s) {
 #pragma mark - النافذة الأولى: متصفح يوتيوب الحر
 
 @interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
-@property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
+@property (nonatomic, copy) void (^onPick)(NSString *urlString);
 @property (nonatomic, strong) NSMutableArray *tabs;
 @property (nonatomic) NSInteger cur;
 @property (nonatomic, strong) UIScrollView *tabBar;
@@ -513,7 +513,6 @@ static NSString *EchoTime(float s) {
 @property (nonatomic) BOOL seeking;
 @property (nonatomic, strong) NSTimer *timer;
 
-// عناصر نافذة تحويل الروابط المستقلة
 @property (nonatomic, strong) UITextField *urlField;
 @property (nonatomic, strong) UILabel *convStatus;
 @end
@@ -790,7 +789,6 @@ static NSString *EchoTime(float s) {
     pickFileBtn.backgroundColor = [UIColor systemIndigoColor];
     [tabMusic addSubview:pickFileBtn];
 
-    // إطار تحويل الروابط المستقل
     CGFloat ry = 90;
     UILabel *convHeader = [self makeLabelAt:CGRectMake(16, ry, w, 20) size:12 bold:YES alpha:0.9];
     convHeader.textAlignment = NSTextAlignmentLeft;
@@ -804,7 +802,7 @@ static NSString *EchoTime(float s) {
     urlField.textColor = UIColor.whiteColor;
     urlField.layer.cornerRadius = 8;
     urlField.font = [UIFont systemFontOfSize:12];
-    urlField.placeholder = @"الصلق الرابط هنا أو بعد تصفح يوتيوب";
+    urlField.placeholder = @"الصق الرابط هنا أو بعد تصفح يوتيوب";
     urlField.keyboardType = UIKeyboardTypeURL;
     urlField.autocapitalizationType = UITextAutocapitalizationTypeNone;
     urlField.autocorrectionType = UITextAutocorrectionTypeNo;
@@ -973,19 +971,35 @@ static NSString *EchoTime(float s) {
 
 - (void)gainQuick:(UIButton *)b { [self setSpec:S_GAIN to:(int)b.tag]; }
 
-// فتح متصفح يوتيوب المستقل
 - (void)browseSong {
     EchoBrowserController *vc = [EchoBrowserController new];
     __weak EchoController *ws = self;
     vc.onPick = ^(NSString *urlString) {
         ws.urlField.text = urlString;
-        ws.convStatus.text = @"✅ تم جلب الرابط من المتصفح! اضغط (تحرز وتلفزيون)";
+        ws.convStatus.text = @"✅ تم جلب الرابط من المتصفح! اضغط (تحويل وتحميل MP3)";
     };
     vc.modalPresentationStyle = UIModalPresentationFullScreen;
     [self presentViewController:vc animated:YES completion:nil];
 }
 
-// تحويل الرابط الملصق إلى MP3 عبر سيرفرات التحويل السريعة
+- (void)pickAudioFile {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.audio", @"public.mp3", @"public.mpeg-4-audio"] inMode:UIDocumentPickerModeOpen];
+#pragma clang diagnostic pop
+    picker.delegate = self;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    NSURL *url = urls.firstObject;
+    if (!url) return;
+    [url startAccessingSecurityScopedResource];
+    NSString *name = url.lastPathComponent;
+    [self loadSongAtURL:url name:name];
+    [url stopAccessingSecurityScopedResource];
+}
+
 - (void)convertPastedURL {
     [self.urlField resignFirstResponder];
     NSString *ytUrl = [self.urlField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
@@ -1089,21 +1103,6 @@ static NSString *EchoTime(float s) {
     return YES;
 }
 
-- (void)pickAudioFile {
-    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.audio", @"public.mp3", @"public.mpeg-4-audio"] inMode:UIDocumentPickerModeOpen];
-    picker.delegate = self;
-    [self presentViewController:picker animated:YES completion:nil];
-}
-
-- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-    NSURL *url = urls.firstObject;
-    if (!url) return;
-    [url startAccessingSecurityScopedResource];
-    NSString *name = url.lastPathComponent;
-    [self loadSongAtURL:url name:name];
-    [url stopAccessingSecurityScopedResource];
-}
-
 - (void)loadSongAtURL:(NSURL *)url name:(NSString *)name {
     DiscordEcho_MusicPlay(0);
     self.songLabel.text = [NSString stringWithFormat:@"⏳ جاري معالجة: %@", name];
@@ -1198,7 +1197,7 @@ static NSString *EchoTime(float s) {
     self.panel.frame = CGRectMake(x, MAX(10, y), w, h);
 }
 
-- (void)dragFab:(UIPanGestureRecognizer * )g {
+- (void)dragFab:(UIPanGestureRecognizer *)g {
     CGPoint t = [g translationInView:self.view];
     self.fab.center = CGPointMake(self.fab.center.x + t.x, self.fab.center.y + t.y);
     [g setTranslation:CGPointZero inView:self.view];
