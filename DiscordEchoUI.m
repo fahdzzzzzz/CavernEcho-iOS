@@ -303,7 +303,7 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - متصفح داخلي (YouTube و Y2Mate مع منع النوافذ المنبثقة وحفظ الصفحة الأخيرة)
+#pragma mark - متصفح داخلي (YouTube و SaveMP3 مع منع النوافذ المنبثقة وحفظ الصفحة الأخيرة)
 
 static BOOL EchoIsAudioExt(NSString *ext) {
     static NSSet *set;
@@ -371,7 +371,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self.view addSubview:self.addr];
 
     NSMutableArray *q = [NSMutableArray array];
-    NSArray *names = @[@"YouTube", @"Y2Mate"];
+    NSArray *names = @[@"YouTube", @"SaveMP3"];
     for (NSInteger i = 0; i < 2; i++) {
         UIButton *b = [self pill:names[i] action:@selector(quickTapped:) tag:i];
         [self.view addSubview:b];
@@ -388,7 +388,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     self.status.font = [UIFont systemFontOfSize:12];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
     self.status.numberOfLines = 2;
-    self.status.text = @"انسخ رابط الفيديو من YouTube، ثم انتقل لـ Y2Mate للتحميل بصيغة MP3.";
+    self.status.text = @"انسخ رابط الفيديو من YouTube، ثم انتقل لـ SaveMP3 للتحميل بصيغة MP3.";
     [self.view addSubview:self.status];
 
     NSString *savedURL = [[NSUserDefaults standardUserDefaults] stringForKey:kLastURLKey];
@@ -397,7 +397,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self loadText:(savedURL.length > 0 ? savedURL : @"https://www.youtube.com")];
 
     [self openTabWithConfig:nil];
-    [self loadText:@"https://v42.www-y2mate.com/"];
+    [self loadText:@"https://ar.savemp3.net/jaqeh/youtube-video-to-mp3/"];
 
     [self selectTab:0];
 }
@@ -445,7 +445,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     CGFloat x = 8;
     for (NSInteger i = 0; i < (NSInteger)self.tabs.count; i++) {
         NSString *t = self.tabs[i].title;
-        if (t.length == 0) t = (i == 0) ? @"YouTube" : (i == 1 ? @"Y2Mate" : @"نافذة");
+        if (t.length == 0) t = (i == 0) ? @"YouTube" : (i == 1 ? @"SaveMP3" : @"نافذة");
         if (t.length > 14) t = [[t substringToIndex:14] stringByAppendingString:@"…"];
         UIButton *b = [self pill:t action:@selector(tabTapped:) tag:i];
         b.frame = CGRectMake(x, 0, 104, 32);
@@ -501,7 +501,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 - (void)backTapped { if (self.web.canGoBack) [self.web goBack]; }
 
 - (void)quickTapped:(UIButton *)b {
-    NSArray *urls = @[@"https://www.youtube.com", @"https://v42.www-y2mate.com/"];
+    NSArray *urls = @[@"https://www.youtube.com", @"https://ar.savemp3.net/jaqeh/youtube-video-to-mp3/"];
     [self loadText:urls[b.tag]];
 }
 
@@ -940,7 +940,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self addToggle:T_SONGECHO to:tabMusic x:16 y:y width:w]; y += 36;
     [self addToggle:T_MONITOR  to:tabMusic x:16 y:y width:w]; y += 40;
     y = [self addSlider:S_MONVOL to:tabMusic y:y];
-    y = [self addHint:@"🌐 المتصفح: يحتوي على نافذة يوتيوب و Y2Mate لتحميل وتشغيل المقاطع."
+    y = [self addHint:@"🌐 المتصفح: يحتوي على نافذة يوتيوب و SaveMP3 لتحميل وتشغيل المقاطع."
                    to:tabMusic y:y height:60];
     tabMusic.contentSize = CGSizeMake(kPanelW, y + 10);
 
