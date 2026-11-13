@@ -46,6 +46,11 @@ extern int   DiscordEcho_MusicIsPlaying(void);
 extern float DiscordEcho_MusicProgress(void);
 extern float DiscordEcho_MusicDuration(void);
 extern void  DiscordEcho_MonitorRead(float *out, unsigned n, double outRate);
+extern void  DiscordEcho_SetSelfMonitor(int on);
+extern void  DiscordEcho_SetSelfMonitorVolume(int v);
+extern unsigned DiscordEcho_RenderCount(void);
+
+static NSString *const kEchoAppName = @"DiscordEcho";   // اسم التطبيق لـ Audius
 
 static NSString *const kModeKey  = @"DiscordEchoMode";
 static NSString *const kPitchKey = @"DiscordEchoPitch";
@@ -78,7 +83,7 @@ enum {
     S_CAVEAMT, S_DAMP, S_MOD,
     S_REPAMT, S_TAPSPEED, S_TAPFB, S_TAPSCAT,
     S_EQLOF, S_EQHIF, S_EQLO, S_EQMID, S_EQHI,
-    S_GAIN, S_MUSVOL, S_MONVOL,
+    S_GAIN, S_MUSVOL, S_MONVOL, S_SELFVOL,
     S_COUNT
 };
 
@@ -101,6 +106,7 @@ static const SliderSpec kSliders[S_COUNT] = {
     [S_GAIN]     = { @"تضخيم الصوت",           @"%",    @"DiscordEchoGain",  100, 800, 100, DiscordEcho_SetGain,          nil },
     [S_MUSVOL]   = { @"مستوى الأغنية",         @"%",    @"DiscordEchoMusicVol", 0, 200, 100, DiscordEcho_MusicSetVolume,  nil },
     [S_MONVOL]   = { @"مستوى سماعك للأغنية",   @"%",    @"DiscordEchoMonVol",  0, 200, 100, DiscordEcho_SetMonitorVolume, nil },
+    [S_SELFVOL]  = { @"مستوى سماعك لصوتك",     @"%",    @"DiscordEchoSelfVol", 0, 200, 100, DiscordEcho_SetSelfMonitorVolume, nil },
 };
 
 typedef struct {
@@ -110,12 +116,13 @@ typedef struct {
     void (*set)(int);
 } ToggleSpec;
 
-enum { T_CAVE, T_REPEAT, T_LOOP, T_MUTE, T_SONGECHO, T_MONITOR, T_COUNT };
+enum { T_CAVE, T_REPEAT, T_LOOP, T_MUTE, T_SONGECHO, T_MONITOR, T_SELFMON, T_COUNT };
 
 #pragma mark - مراقبة: تشغيل الأغنية (مع الصدى) في سماعتك
 
 static AVAudioEngine *gMonEngine;
-static int gMonWanted;
+static int gMonSong, gMonSelf;
+static int echo_mon_wanted(void) { return gMonSong || gMonSelf; }
 static BOOL gAppReady;
 
 static void echo_monitor_stop(void) {
@@ -158,14 +165,31 @@ static void echo_monitor_start(void) {
 
 static void echo_monitor_sync(void) {
     if (!gAppReady) return;
-    if (gMonWanted) echo_monitor_start();
+    if (echo_mon_wanted()) echo_monitor_start();
     else echo_monitor_stop();
 }
 
 static void echo_set_monitor(int on) {
-    gMonWanted = on ? 1 : 0;
+    gMonSong = on ? 1 : 0;
     DiscordEcho_SetMonitor(on);
     echo_monitor_sync();
+}
+
+static void echo_set_selfmon(int on) {
+    gMonSelf = on ? 1 : 0;
+    DiscordEcho_SetSelfMonitor(on);
+    echo_monitor_sync();
+}
+
+// هل الصوت طالع على سماعات؟ (بدون سماعات صوتك يرجع للمايك ويصير صفير)
+static BOOL echo_headphones(void) {
+    NSArray<AVAudioSessionPortDescription *> *outs = AVAudioSession.sharedInstance.currentRoute.outputs;
+    if (outs.count == 0) return YES;
+    for (AVAudioSessionPortDescription *o in outs) {
+        if ([o.portType isEqualToString:AVAudioSessionPortBuiltInSpeaker] ||
+            [o.portType isEqualToString:AVAudioSessionPortBuiltInReceiver]) return NO;
+    }
+    return YES;
 }
 
 static const ToggleSpec kToggles[T_COUNT] = {
@@ -175,6 +199,7 @@ static const ToggleSpec kToggles[T_COUNT] = {
     [T_MUTE]     = { @"🔇 كتم صوتي أثناء الأغنية", @"DiscordEchoVoiceMute", 0, DiscordEcho_SetVoiceMute },
     [T_SONGECHO] = { @"👻 الصدى على الأغنية",      @"DiscordEchoSongEcho", 1, DiscordEcho_SetSongEcho },
     [T_MONITOR]  = { @"🎧 أنا أسمع الأغنية",       @"DiscordEchoMonitor",  0, echo_set_monitor },
+    [T_SELFMON]  = { @"🎧 أسمع صوتي (مع الصدى)",   @"DiscordEchoSelfMon",  0, echo_set_selfmon },
 };
 
 // أنماط الموازن: حد الجهير، حد الحاد، جهير%، وسط%، حاد%
@@ -276,6 +301,173 @@ static NSString *EchoTime(float s) {
 }
 @end
 
+#pragma mark - بحث الأغاني (Audius)
+
+// Audius: منصة موسيقى فنانين مستقلين، لها API رسمي للبث. نبحث، نختار، ننزّل مؤقتاً، ونشغّل.
+@interface EchoSearchController : UIViewController <UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate>
+@property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
+@property (nonatomic, strong) UISearchBar *bar;
+@property (nonatomic, strong) UITableView *table;
+@property (nonatomic, strong) UILabel *status;
+@property (nonatomic, strong) UIButton *closeBtn;
+@property (nonatomic, strong) NSArray<NSDictionary *> *items;
+@property (nonatomic, strong) NSURLSessionTask *task;
+@end
+
+@implementation EchoSearchController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    self.view.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1];
+
+    self.closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.closeBtn setTitle:@"✕ إغلاق" forState:UIControlStateNormal];
+    [self.closeBtn addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.closeBtn];
+
+    self.bar = [[UISearchBar alloc] init];
+    self.bar.placeholder = @"🔍 اسم أغنية أو فنان";
+    self.bar.delegate = self;
+    self.bar.searchBarStyle = UISearchBarStyleMinimal;
+    self.bar.returnKeyType = UIReturnKeySearch;
+    [self.view addSubview:self.bar];
+
+    self.status = [[UILabel alloc] init];
+    self.status.textAlignment = NSTextAlignmentCenter;
+    self.status.font = [UIFont systemFontOfSize:13];
+    self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
+    self.status.text = @"اكتب اسم الأغنية واضغط بحث. المصدر: Audius";
+    [self.view addSubview:self.status];
+
+    self.table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    self.table.dataSource = self;
+    self.table.delegate = self;
+    self.table.backgroundColor = UIColor.clearColor;
+    self.table.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
+    [self.view addSubview:self.table];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGRect b = self.view.bounds;
+    self.closeBtn.frame = CGRectMake(b.size.width - 96, 10, 84, 34);
+    self.bar.frame = CGRectMake(8, 46, b.size.width - 16, 50);
+    self.status.frame = CGRectMake(16, 98, b.size.width - 32, 24);
+    self.table.frame = CGRectMake(0, 126, b.size.width, b.size.height - 126);
+}
+
+- (void)closeTapped {
+    [self.task cancel];
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (NSURLQueryItem *)appNameItem { return [NSURLQueryItem queryItemWithName:@"app_name" value:kEchoAppName]; }
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)bar {
+    [bar resignFirstResponder];
+    NSString *q = [bar.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (q.length == 0) return;
+    [self.task cancel];
+    self.status.text = @"⏳ جاري البحث…";
+    NSURLComponents *c = [NSURLComponents componentsWithString:@"https://api.audius.co/v1/tracks/search"];
+    c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"query" value:q],
+                      [NSURLQueryItem queryItemWithName:@"limit" value:@"25"],
+                      [self appNameItem] ];
+    __weak EchoSearchController *ws = self;
+    NSURLSessionDataTask *t = [NSURLSession.sharedSession dataTaskWithURL:c.URL
+        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+        if (e && e.code == NSURLErrorCancelled) return;
+        NSMutableArray *out = [NSMutableArray array];
+        if (d && !e) {
+            id j = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+            id arr = [j isKindOfClass:NSDictionary.class] ? ((NSDictionary *)j)[@"data"] : nil;
+            if ([arr isKindOfClass:NSArray.class]) {
+                for (id it in (NSArray *)arr) {
+                    if (![it isKindOfClass:NSDictionary.class]) continue;
+                    NSDictionary *tr = it;
+                    id tid = tr[@"id"], title = tr[@"title"];
+                    if (![tid isKindOfClass:NSString.class] || ![title isKindOfClass:NSString.class]) continue;
+                    id streamable = tr[@"is_streamable"];
+                    if ([streamable isKindOfClass:NSNumber.class] && ![streamable boolValue]) continue;
+                    if ([tr[@"stream_conditions"] isKindOfClass:NSDictionary.class]) continue;   // محتوى مقفول
+                    id user = tr[@"user"];
+                    NSString *artist = ([user isKindOfClass:NSDictionary.class] &&
+                                        [user[@"name"] isKindOfClass:NSString.class]) ? user[@"name"] : @"";
+                    id dur = tr[@"duration"];
+                    [out addObject:@{ @"id": tid, @"title": title, @"artist": artist,
+                                      @"dur": [dur isKindOfClass:NSNumber.class] ? dur : @0 }];
+                }
+            }
+        }
+        BOOL failed = (e != nil || d == nil);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            EchoSearchController *s = ws;
+            if (!s) return;
+            s.items = out;
+            [s.table reloadData];
+            s.status.text = failed ? @"❌ ما قدرت أتصل بالبحث. تأكد من النت وجرّب مرة ثانية"
+                          : (out.count == 0 ? @"ما لقيت نتائج، جرّب كلمة ثانية"
+                                            : [NSString stringWithFormat:@"%lu نتيجة. اضغط على أغنية لتشغيلها", (unsigned long)out.count]);
+        });
+    }];
+    self.task = t;
+    [t resume];
+}
+
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)section { return (NSInteger)self.items.count; }
+
+- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
+    UITableViewCell *cell = [tv dequeueReusableCellWithIdentifier:@"c"];
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"c"];
+        cell.backgroundColor = UIColor.clearColor;
+        cell.textLabel.textColor = UIColor.whiteColor;
+        cell.detailTextLabel.textColor = [UIColor colorWithWhite:1 alpha:0.6];
+    }
+    NSDictionary *it = self.items[ip.row];
+    cell.textLabel.text = it[@"title"];
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@  ·  %@", it[@"artist"], EchoTime([it[@"dur"] floatValue])];
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [tv deselectRowAtIndexPath:ip animated:YES];
+    NSDictionary *it = self.items[ip.row];
+    NSString *tid = it[@"id"];
+    NSString *name = [it[@"artist"] length] ? [NSString stringWithFormat:@"%@ — %@", it[@"title"], it[@"artist"]] : it[@"title"];
+    self.status.text = @"⏳ جاري تنزيل الأغنية…";
+    self.view.userInteractionEnabled = NO;
+
+    NSString *path = [NSString stringWithFormat:@"https://api.audius.co/v1/tracks/%@/stream", tid];
+    NSURLComponents *c = [NSURLComponents componentsWithString:path];
+    c.queryItems = @[ [self appNameItem] ];
+    __weak EchoSearchController *ws = self;
+    NSURLSessionDownloadTask *t = [NSURLSession.sharedSession downloadTaskWithURL:c.URL
+        completionHandler:^(NSURL *loc, NSURLResponse *resp, NSError *err) {
+        NSInteger code = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : 0;
+        NSURL *dest = nil;
+        if (loc && !err && code >= 200 && code < 300) {
+            NSString *fn = [NSString stringWithFormat:@"echo_%@.mp3", tid];
+            dest = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:fn]];
+            [[NSFileManager defaultManager] removeItemAtURL:dest error:nil];
+            if (![[NSFileManager defaultManager] moveItemAtURL:loc toURL:dest error:nil]) dest = nil;
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            EchoSearchController *s = ws;
+            if (!s) return;
+            s.view.userInteractionEnabled = YES;
+            if (!dest) { s.status.text = @"❌ فشل التنزيل، جرّب أغنية ثانية"; return; }
+            void (^cb)(NSURL *, NSString *) = s.onPick;
+            [s dismissViewControllerAnimated:YES completion:^{ if (cb) cb(dest, name); }];
+        });
+    }];
+    self.task = t;
+    [t resume];
+}
+
+@end
+
 #pragma mark - الواجهة
 
 @interface EchoController : UIViewController <UIDocumentPickerDelegate> {
@@ -296,6 +488,10 @@ static NSString *EchoTime(float s) {
 @property (nonatomic) BOOL robot;
 // المضخّم
 @property (nonatomic, strong) UIProgressView *meter;
+@property (nonatomic, strong) UILabel *micStatus;
+@property (nonatomic, strong) UILabel *monWarn;
+@property (nonatomic) unsigned lastRender;
+@property (nonatomic) CFTimeInterval lastRenderTime;
 // الأغاني
 @property (nonatomic, strong) UILabel *songLabel;
 @property (nonatomic, strong) UILabel *timeLabel;
@@ -446,7 +642,7 @@ static NSString *EchoTime(float s) {
     self.panel = panel;
 
     // التبويبات
-    UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"الصدى", @"الموازن", @"النبرة", @"المضخّم", @"🎵"]];
+    UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"الصدى", @"الموازن", @"النبرة", @"المايك", @"🎵"]];
     tabs.frame = CGRectMake(16, 12, kPanelW - 32, 34);
     tabs.selectedSegmentIndex = 0;
     tabs.selectedSegmentTintColor = [UIColor colorWithWhite:1 alpha:0.28];
@@ -579,15 +775,33 @@ static NSString *EchoTime(float s) {
     self.meter = meter;
     y += 20;
 
-    [self addHint:@"تكلّم وشوف الشريط. المضخّم يرفع صوتك لين ×8 مع حد ناعم يمنع التقطع.\nلو الشريط صار أحمر دايم، خفّض التضخيم." to:tabAmp y:y height:60];
-    tabAmp.contentSize = CGSizeMake(kPanelW, y + 80);
+    self.micStatus = [self makeLabelAt:CGRectMake(16, y, w, 20) size:13 bold:YES alpha:0.9];
+    self.micStatus.text = @"🔴 المايك مو شغال. ادخل روم صوتي وافتح المايك";
+    self.micStatus.textColor = [UIColor systemOrangeColor];
+    [tabAmp addSubview:self.micStatus];
+    y += 32;
+
+    y = [self addHeader:@"🎧 أسمع صوتي" to:tabAmp y:y];
+    [self addToggle:T_SELFMON to:tabAmp x:16 y:y width:w];
+    y += 38;
+    y = [self addSlider:S_SELFVOL to:tabAmp y:y];
+    self.monWarn = [self makeLabelAt:CGRectMake(16, y, w, 34) size:12 bold:YES alpha:1];
+    self.monWarn.textColor = [UIColor systemOrangeColor];
+    [tabAmp addSubview:self.monWarn];
+    y += 40;
+
+    y = [self addHint:@"تكلّم وشوف الشريط. المضخّم يرفع صوتك لين ×8 مع حد ناعم يمنع التقطع. لو الشريط صار أحمر دايم، خفّض التضخيم.\n«أسمع صوتي» يوصّل لسماعتك نفس صوتك اللي يسمعونه (مع الصدى والنبرة) بتأخير بسيط. يشتغل بس لما المايك شغال في ديسكورد: داخل روم صوتي وغير مكتوم. استخدم سماعات."
+                   to:tabAmp y:y height:104];
+    tabAmp.contentSize = CGSizeMake(kPanelW, y + 10);
 
     // ================= تبويب الأغاني =================
     self.songLabel = [self makeLabelAt:CGRectMake(16, 4, w, 34) size:13 bold:YES alpha:1];
-    self.songLabel.text = @"ما فيه أغنية. اختر ملف صوت من تطبيق الملفات";
+    self.songLabel.text = @"ما فيه أغنية. ابحث عن أغنية أو اختر ملف صوت";
     [tabMusic addSubview:self.songLabel];
 
-    [tabMusic addSubview:[self makeButton:@"📂 اختر أغنية" frame:CGRectMake(16, 42, w, 34) tag:0 action:@selector(chooseSong)]];
+    CGFloat sbw = (w - 8) / 2.0;
+    [tabMusic addSubview:[self makeButton:@"🔍 ابحث عن أغنية" frame:CGRectMake(16, 42, sbw, 34) tag:0 action:@selector(searchSong)]];
+    [tabMusic addSubview:[self makeButton:@"📂 من الملفات" frame:CGRectMake(16 + sbw + 8, 42, sbw, 34) tag:0 action:@selector(chooseSong)]];
 
     UISlider *seek = [self makeSliderAt:CGRectMake(16, 84, w, 28) min:0 max:1 value:0 action:@selector(seekChanged:)];
     [seek addTarget:self action:@selector(seekBegan:) forControlEvents:UIControlEventTouchDown];
@@ -611,8 +825,8 @@ static NSString *EchoTime(float s) {
     [self addToggle:T_SONGECHO to:tabMusic x:16 y:y width:w]; y += 36;
     [self addToggle:T_MONITOR  to:tabMusic x:16 y:y width:w]; y += 40;
     y = [self addSlider:S_MONVOL to:tabMusic y:y];
-    y = [self addHint:@"اللي معك في ديسكورد يسمعون الأغنية من مايكك مع الصدى.\n«أنا أسمع الأغنية» توصّلها لسماعتك أنت. الأفضل تستخدم سماعات، وإلا المايك يلتقطها من السبيكر ويدخل صدى زيادة."
-                   to:tabMusic y:y height:76];
+    y = [self addHint:@"اللي معك في ديسكورد يسمعون الأغنية من مايكك مع الصدى.\n«أنا أسمع الأغنية» توصّلها لسماعتك أنت. الأفضل تستخدم سماعات، وإلا المايك يلتقطها من السبيكر ويدخل صدى زيادة.\nالبحث من Audius (موسيقى فنانين مستقلين)."
+                   to:tabMusic y:y height:92];
     tabMusic.contentSize = CGSizeMake(kPanelW, y + 10);
 
     [self refreshModeButtons];
@@ -757,17 +971,24 @@ static NSString *EchoTime(float s) {
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     NSURL *url = urls.firstObject;
-    if (url) [self loadSongAtURL:url];
+    if (url) [self loadSongAtURL:url name:url.lastPathComponent cleanup:NO];
 }
 
-- (void)loadSongAtURL:(NSURL *)url {
-    NSString *name = url.lastPathComponent;
+- (void)searchSong {
+    EchoSearchController *vc = [EchoSearchController new];
+    __weak EchoController *ws = self;
+    vc.onPick = ^(NSURL *url, NSString *name) { [ws loadSongAtURL:url name:name cleanup:YES]; };
+    [self presentViewController:vc animated:YES completion:nil];
+}
+
+- (void)loadSongAtURL:(NSURL *)url name:(NSString *)name cleanup:(BOOL)cleanup {
     DiscordEcho_MusicPlay(0);
     self.songLabel.text = [NSString stringWithFormat:@"⏳ جاري التحميل: %@", name];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         size_t count = 0;
         BOOL truncated = NO;
         float *buf = EchoDecodeFile(url, &count, &truncated);
+        if (cleanup) [[NSFileManager defaultManager] removeItemAtURL:url error:nil];   // العينات صارت بالذاكرة
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!buf) {
                 self.songLabel.text = @"❌ ما قدرت أقرأ الملف. جرّب mp3 أو m4a أو wav";
@@ -825,6 +1046,14 @@ static NSString *EchoTime(float s) {
             s.meter.progressTintColor = (pk > 0.98f) ? [UIColor systemRedColor]
                                       : (pk > 0.8f)  ? [UIColor systemOrangeColor]
                                                      : [UIColor systemGreenColor];
+            unsigned c = DiscordEcho_RenderCount();
+            CFTimeInterval now = CACurrentMediaTime();
+            if (c != s.lastRender) { s.lastRender = c; s.lastRenderTime = now; }
+            BOOL live = (c != 0) && (now - s.lastRenderTime) < 0.6;
+            s.micStatus.text = live ? @"🟢 المايك شغال" : @"🔴 المايك مو شغال. ادخل روم صوتي وافتح المايك";
+            s.micStatus.textColor = live ? [UIColor systemGreenColor] : [UIColor systemOrangeColor];
+            BOOL selfOn = s->_sw[T_SELFMON].on;
+            s.monWarn.text = (selfOn && !echo_headphones()) ? @"⚠️ وصّل سماعات، وإلا صوتك يرجع للمايك ويصير صفير" : @"";
         } else if (tab == TAB_MUSIC) {
             [s refreshMusicUI];
         }
@@ -937,7 +1166,7 @@ static void echo_ui_init(void) {
                     object:nil
                      queue:[NSOperationQueue mainQueue]
                 usingBlock:^(NSNotification *n) {
-        if (gMonWanted && n.object == gMonEngine) {
+        if (echo_mon_wanted() && n.object == gMonEngine) {
             echo_monitor_stop();
             echo_monitor_sync();
         }
