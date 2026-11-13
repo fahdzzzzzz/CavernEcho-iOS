@@ -183,7 +183,6 @@ static void echo_set_selfmon(int on) {
     echo_monitor_sync();
 }
 
-// هل الصوت طالع على سماعات؟
 static BOOL echo_headphones(void) {
     NSArray *outs = AVAudioSession.sharedInstance.currentRoute.outputs;
     if (outs.count == 0) return YES;
@@ -336,7 +335,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 
 - (WKWebView *)web { return (self.cur >= 0 && self.cur < (NSInteger)self.tabs.count) ? self.tabs[self.cur] : nil; }
 
-- (UIButton *)pill:(NSString * )t action:(SEL)a tag:(NSInteger)tag {
+- (UIButton *)pill:(NSString *)t action:(SEL)a tag:(NSInteger)tag {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
     [b setTitle:t forState:UIControlStateNormal];
     [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
@@ -584,7 +583,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 }
 @end
 
-#pragma mark - بحث الأغاني (مع يوتيوب)
+#pragma mark - بحث الأغاني (مع يوتيوب المحدّث بالبحث الفوري المتعدد)
 
 @interface EchoSearchController : UIViewController <UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
@@ -620,7 +619,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self.view addSubview:self.src];
 
     self.bar = [[UISearchBar alloc] init];
-    self.bar.placeholder = @"🔍 ابحث باسم الأغنية أو الصق رابط يوتيوب";
+    self.bar.placeholder = @"🔍 اكتب اسم الأغنية في يوتيوب مباشرة";
     self.bar.delegate = self;
     self.bar.searchBarStyle = UISearchBarStyleMinimal;
     self.bar.returnKeyType = UIReturnKeySearch;
@@ -665,7 +664,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
         case 0: self.status.text = @"أغاني من iTunes"; break;
         case 1: self.status.text = @"أغاني من Internet Archive"; break;
         case 2: self.status.text = @"أغاني من Audius"; break;
-        case 3: self.status.text = @"📺 بوت يوتيوب: ابحث بأي اسم أو الصق رابط يوتيوب مباشرة"; break;
+        case 3: self.status.text = @"📺 اكتب اسم الأغنية واضغط بحث لتشغيلها فوراً"; break;
         default: break;
     }
 }
@@ -678,7 +677,60 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
     [self.table reloadData];
     if (failed) self.status.text = @"❌ فشل الاتصال بالبحث.";
     else if (out.count == 0) self.status.text = @"ما لقيت نتائج.";
-    else self.status.text = [NSString stringWithFormat:@"%lu نتيجة جاهزة", (unsigned long)out.count];
+    else self.status.text = [NSString stringWithFormat:@"%lu نتيجة جاهزة — اضغط للتشغيل", (unsigned long)out.count];
+}
+
+- (void)searchYouTubeWithInstances:(NSArray *)instances index:(NSInteger)idx query:(NSString *)q {
+    if (idx >= (NSInteger)instances.count) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self finishSearch:@[] failed:YES code:0];
+        });
+        return;
+    }
+    
+    NSString *base = instances[idx];
+    NSURLComponents *c = [NSURLComponents componentsWithString:[NSString stringWithFormat:@"%@/api/v1/search", base]];
+    c.queryItems = @[
+        [NSURLQueryItem queryItemWithName:@"q" value:q],
+        [NSURLQueryItem queryItemWithName:@"type" value:@"video"]
+    ];
+    
+    __weak EchoSearchController *ws = self;
+    NSURLSessionDataTask *t = [NSURLSession.sharedSession dataTaskWithURL:c.URL
+        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+        if (e && e.code == NSURLErrorCancelled) return;
+        
+        id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        if (![j isKindOfClass:NSArray.class] || ((NSArray *)j).count == 0) {
+            [ws searchYouTubeWithInstances:instances index:idx + 1 query:q];
+            return;
+        }
+        
+        NSMutableArray *out = [NSMutableArray array];
+        for (id it in (NSArray *)j) {
+            if (![it isKindOfClass:NSDictionary.class]) continue;
+            NSString *vId = EchoStr(it[@"videoId"]);
+            NSString *title = EchoStr(it[@"title"]);
+            NSString *author = EchoStr(it[@"author"]);
+            if (vId.length > 0 && title.length > 0) {
+                NSString *streamApi = [NSString stringWithFormat:@"%@/api/v1/videos/%@", base, vId];
+                [out addObject:@{
+                    @"title": title,
+                    @"artist": author.length ? author : @"YouTube",
+                    @"api": streamApi,
+                    @"ext": @"m4a"
+                }];
+            }
+        }
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            EchoSearchController *s = ws;
+            if (!s) return;
+            [s finishSearch:out failed:NO code:200];
+        });
+    }];
+    self.task = t;
+    [t resume];
 }
 
 - (void)searchBarSearchButtonClicked:(UISearchBar *)bar {
@@ -690,63 +742,12 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
 
     NSInteger source = self.src.selectedSegmentIndex;
     if (source == 3) {
-        NSString *videoId = nil;
-        if ([q containsString:@"youtu.be/"]) {
-            NSArray *parts = [q componentsSeparatedByString:@"youtu.be/"];
-            if (parts.count > 1) videoId = [[parts[1] componentsSeparatedByString:@"?"] firstObject];
-        } else if ([q containsString:@"watch?v="]) {
-            NSArray *parts = [q componentsSeparatedByString:@"watch?v="];
-            if (parts.count > 1) videoId = [[parts[1] componentsSeparatedByString:@"&"] firstObject];
-        }
-        
-        NSURLComponents *c = nil;
-        if (videoId && videoId.length > 0) {
-            c = [NSURLComponents componentsWithString:[NSString stringWithFormat:@"https://pipedapi.kavin.rocks/streams/%@", videoId]];
-        } else {
-            c = [NSURLComponents componentsWithString:@"https://pipedapi.kavin.rocks/search"];
-            c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"q" value:q] ];
-        }
-
-        __weak EchoSearchController *ws = self;
-        NSURLSessionDataTask *t = [NSURLSession.sharedSession dataTaskWithURL:c.URL
-            completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-            if (e && e.code == NSURLErrorCancelled) return;
-            NSMutableArray *out = [NSMutableArray array];
-            id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
-            
-            if (videoId && [j isKindOfClass:NSDictionary.class]) {
-                NSArray *audioStreams = j[@"audioStreams"];
-                if ([audioStreams isKindOfClass:NSArray.class] && audioStreams.count > 0) {
-                    NSDictionary *bestAudio = audioStreams.firstObject;
-                    NSString *urlStr = EchoStr(bestAudio[@"url"]);
-                    if (urlStr.length > 0) {
-                        [out addObject:@{ @"title": EchoStr(j[@"title"]) ?: @"مقطع يوتيوب", @"artist": @"YouTube", @"url": urlStr, @"ext": @"m4a" }];
-                    }
-                }
-            } else if ([j isKindOfClass:NSDictionary.class] && [j[@"items"] isKindOfClass:NSArray.class]) {
-                for (id it in j[@"items"]) {
-                    if (![it isKindOfClass:NSDictionary.class]) continue;
-                    NSString *type = EchoStr(it[@"type"]);
-                    if ([type isEqualToString:@"stream"] || type.length == 0) {
-                        NSString *vId = EchoStr(it[@"url"]);
-                        if ([vId containsString:@"v="]) vId = [[vId componentsSeparatedByString:@"v="] lastObject];
-                        NSString *title = EchoStr(it[@"title"]);
-                        NSString *uploader = EchoStr(it[@"uploaderName"]);
-                        if (vId.length > 0 && title.length > 0) {
-                            NSString *streamApi = [NSString stringWithFormat:@"https://pipedapi.kavin.rocks/streams/%@", vId];
-                            [out addObject:@{ @"title": title, @"artist": uploader.length ? uploader : @"YouTube", @"api": streamApi, @"ext": @"m4a" }];
-                        }
-                    }
-                }
-            }
-            dispatch_async(dispatch_get_main_queue(), ^{
-                EchoSearchController *s = ws;
-                if (!s) return;
-                [s finishSearch:out failed:(e != nil) code:0];
-            });
-        }];
-        self.task = t;
-        [t resume];
+        NSArray *instances = @[
+            @"https://inv.nadeko.net",
+            @"https://invidious.nerdvpn.de",
+            @"https://invidious.privacyredirect.com"
+        ];
+        [self searchYouTubeWithInstances:instances index:0 query:q];
         return;
     }
 
@@ -902,9 +903,15 @@ static float EchoNum(id v) { return [v isKindOfClass:NSNumber.class] ? [v floatV
             id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
             NSString *streamUrl = nil;
             if ([j isKindOfClass:NSDictionary.class]) {
-                NSArray *audioStreams = j[@"audioStreams"];
-                if ([audioStreams isKindOfClass:NSArray.class] && audioStreams.count > 0) {
-                    streamUrl = EchoStr(audioStreams.firstObject[@"url"]);
+                NSArray *formats = j[@"adaptiveFormats"];
+                if ([formats isKindOfClass:NSArray.class]) {
+                    for (NSDictionary *f in formats) {
+                        NSString *type = EchoStr(f[@"type"]);
+                        if ([type containsString:@"audio/mp4"] || [type containsString:@"audio/"]) {
+                            streamUrl = EchoStr(f[@"url"]);
+                            if (streamUrl.length > 0) break;
+                        }
+                    }
                 }
             }
             dispatch_async(dispatch_get_main_queue(), ^{
