@@ -194,8 +194,8 @@ static void echo_params(EchoParams *P, float rate, UInt32 chans) {
     P->wet_gain = ((float)lvl / 100.0f) * ((float)g_boost / 100.0f);
 
     // ----- مودات جاهزة -----
-    float size = 1.4f + 1.8f * r;
-    float fb = 0.84f + 0.14f * r;
+    float size = 1.4f + 2.4f * r;                 // حجم الكهف (أكبر = ذيل أطول)
+    float fb = 0.84f + 0.152f * powf(r, 0.6f);   // 0.84 .. 0.992 (منحنى يطوّل الذيل بشكل أنعم)
     float cwet = 3.0f * (float)g_cave_amt / 100.0f;
     P->kind = 0;
     if (mode == 1 || mode == 2) {
@@ -210,7 +210,7 @@ static void echo_params(EchoParams *P, float rate, UInt32 chans) {
         fb = kFb[mode] + (r - 0.6f) * 0.04f;
         cwet = kWet[mode];
     }
-    if (fb > 0.985f) fb = 0.985f;
+    if (fb > 0.994f) fb = 0.994f;
     P->cave_fb = fb;
     P->cave_wet = cwet;
 
