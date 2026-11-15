@@ -85,7 +85,7 @@ void DiscordEcho_SetSelfMonitor(int on) { g_selfmon = on ? 1 : 0; }
 void DiscordEcho_SetSelfMonitorVolume(int v) { g_selfmon_vol = clampi(v, 0, 200); }
 unsigned DiscordEcho_RenderCount(void) { return g_render_count; }
 
-// ---------- تعريفات هياكل البيانات الأساسية (تم نقلها للأعلى لتجنب أخطاء المتغيرات) ----------
+// ---------- تعريفات هياكل البيانات الأساسية ----------
 #define RV_COMBS    8
 #define RV_APS      4
 #define RV_COMB_MAX 16384
@@ -141,7 +141,7 @@ void DiscordEcho_ResetAll(void) {
     g_stail = 0.0f;
 }
 
-// ---------- حد ناعم: يرفع الصوت بدون ما يقطعه ----------
+// ---------- حد ناعم ----------
 static float soft_limit(float y) {
     float a = y < 0 ? -y : y;
     if (a <= 0.6f) return y;
@@ -361,7 +361,7 @@ static float ps_process(PitchShifter *ps, float x, float ratio) {
     return y;
 }
 
-// ---------- مشغّل الأغنية (اليوتيوب والمقاطع) ----------
+// ---------- مشغّل الأغنية ----------
 typedef struct { float *data; size_t len; } MusicSlot;
 static MusicSlot g_mslot[2];
 static volatile int    g_mcur = -1;
@@ -611,17 +611,19 @@ static OSStatus my_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
     OSStatus st = orig_render(unit, flags, ts, bus, frames, io);
     if (st != noErr || bus != 1 || io == NULL) return st;
 
-    if (unit != g_unit || !g_have_fmt) {
-        UInt32 sz = sizeof(g_fmt);
-        if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat,
-                                 kAudioUnitScope_Output, 1, &g_fmt, &sz) == noErr) {
+    // تحديث ديناميكي للـ Sample Rate لتلافي مشاكل البلوتوث وتغير الترددات فجأة
+    UInt32 sz = sizeof(g_fmt);
+    AudioStreamBasicDescription currentFmt;
+    if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat,
+                             kAudioUnitScope_Output, 1, &currentFmt, &sz) == noErr) {
+        if (!g_have_fmt || g_unit != unit || currentFmt.mSampleRate != g_fmt.mSampleRate || currentFmt.mChannelsPerFrame != g_fmt.mChannelsPerFrame) {
+            g_fmt = currentFmt;
             g_unit = unit;
             g_have_fmt = 1;
             DiscordEcho_ResetAll();
-        } else {
-            g_have_fmt = 0;
-            return st;
         }
+    } else if (!g_have_fmt) {
+        return st;
     }
 
     float rate = (float)g_fmt.mSampleRate;
