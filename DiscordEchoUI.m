@@ -47,6 +47,7 @@ extern void  DiscordEcho_MonitorRead(float *out, unsigned n, double outRate);
 extern void  DiscordEcho_SetSelfMonitor(int on);
 extern void  DiscordEcho_SetSelfMonitorVolume(int v);
 extern unsigned DiscordEcho_RenderCount(void);
+extern void  DiscordEcho_ResetAll(void);
 
 static NSString *const kModeKey  = @"DiscordEchoMode";
 static NSString *const kPitchKey = @"DiscordEchoPitch";
@@ -303,14 +304,7 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - متصفح داخلي (YouTube و SaveMP3 مع منع النوافذ المنبثقة وحفظ الصفحة الأخيرة)
-
-static BOOL EchoIsAudioExt(NSString *ext) {
-    static NSSet *set;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ set = [NSSet setWithObjects:@"mp3", @"m4a", @"wav", @"aac", @"aif", @"aiff", @"caf", @"flac", nil]; });
-    return ext.length && [set containsObject:ext.lowercaseString];
-}
+#pragma mark - متصفح داخلي (مفتوح النوافذ ويقبل الروابط المباشرة والبحث)
 
 @interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
@@ -359,7 +353,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     self.addr.textColor = UIColor.whiteColor;
     self.addr.layer.cornerRadius = 9;
     self.addr.font = [UIFont systemFontOfSize:14];
-    self.addr.placeholder = @"اكتب موقع أو الصق رابط الفيديو";
+    self.addr.placeholder = @"اكتب رابط الموقع أو ابحث في قوقل...";
     self.addr.keyboardType = UIKeyboardTypeURL;
     self.addr.autocapitalizationType = UITextAutocapitalizationTypeNone;
     self.addr.autocorrectionType = UITextAutocorrectionTypeNo;
@@ -388,7 +382,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     self.status.font = [UIFont systemFontOfSize:12];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
     self.status.numberOfLines = 2;
-    self.status.text = @"انسخ رابط الفيديو من YouTube، ثم انتقل لـ SaveMP3 للتحميل بصيغة MP3.";
+    self.status.text = @"ابحث براحتك، افتح أي موقع MP3، وحمّل الملفات لصوتيات الديسكورد.";
     [self.view addSubview:self.status];
 
     NSString *savedURL = [[NSUserDefaults standardUserDefaults] stringForKey:kLastURLKey];
@@ -468,7 +462,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 
 - (void)addTabTapped {
     [self openTabWithConfig:nil];
-    [self loadText:@"https://www.youtube.com"];
+    [self loadText:@"https://www.google.com"];
 }
 
 - (void)closeTabTapped {
@@ -481,10 +475,13 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self selectTab:n];
 }
 
+// فتح النوافذ الجديدة والروابط المنبثقة بحرية داخل المتصفح
 - (WKWebView *)webView:(WKWebView *)wv createWebViewWithConfiguration:(WKWebViewConfiguration *)cfg
    forNavigationAction:(WKNavigationAction *)a windowFeatures:(WKWindowFeatures *)f {
-    if (a.request.URL) {
-        [wv loadRequest:a.request];
+    if (a.targetFrame == nil || !a.targetFrame.isMainFrame) {
+        if (a.request.URL) {
+            [wv loadRequest:a.request];
+        }
     }
     return nil;
 }
@@ -509,14 +506,21 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     t = [t stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (t.length == 0) return;
     NSURL *u = nil;
-    if ([t hasPrefix:@"http://"] || [t hasPrefix:@"https://"]) u = [NSURL URLWithString:t];
-    else if ([t containsString:@"."] && ![t containsString:@" "]) u = [NSURL URLWithString:[@"https://" stringByAppendingString:t]];
-    else {
-        NSURLComponents *c = [NSURLComponents componentsWithString:@"https://www.youtube.com/results"];
-        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"search_query" value:t] ];
+    if ([t hasPrefix:@"http://"] || [t hasPrefix:@"https://"]) {
+        u = [NSURL URLWithString:t];
+    } else if ([t containsString:@"."] && ![t containsString:@" "]) {
+        u = [NSURL URLWithString:[@"https://" stringByAppendingString:t]];
+    } else {
+        // إذا كتب كلمات وليست رابطاً، ابحث عنها في قوقل مباشرة
+        NSURLComponents *c = [NSURLComponents componentsWithString:@"https://www.google.com/search"];
+        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"q" value:t] ];
         u = c.URL;
     }
-    if (u) { self.addr.text = u.absoluteString; [self.web loadRequest:[NSURLRequest requestWithURL:u]]; }
+    if (u) { 
+        self.addr.text = u.absoluteString; 
+        [[NSUserDefaults standardUserDefaults] setObject:u.absoluteString forKey:kLastURLKey];
+        [self.web loadRequest:[NSURLRequest requestWithURL:u]]; 
+    }
 }
 
 - (BOOL)textFieldShouldReturn:(UITextField *)tf {
@@ -537,7 +541,13 @@ static BOOL EchoIsAudioExt(NSString *ext) {
         if ([a respondsToSelector:NSSelectorFromString(@"shouldPerformDownload")])
             should = [[a valueForKey:@"shouldPerformDownload"] boolValue];
         NSString *ext = a.request.URL.pathExtension;
-        if (should || EchoIsAudioExt(ext)) { h((WKNavigationActionPolicy)2); return; }
+        static NSSet *audioExts;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{ audioExts = [NSSet setWithObjects:@"mp3", @"m4a", @"wav", @"aac", @"flac", nil]; });
+        if (should || [audioExts containsObject:ext.lowercaseString]) { 
+            h((WKNavigationActionPolicy)2); 
+            return; 
+        }
     }
     h(WKNavigationActionPolicyAllow);
 }
@@ -547,8 +557,14 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     if ([self canDownload]) {
         NSString *mime = r.response.MIMEType.lowercaseString ?: @"";
         NSString *ext = r.response.suggestedFilename.pathExtension;
-        BOOL audio = [mime hasPrefix:@"audio/"] || EchoIsAudioExt(ext) || EchoIsAudioExt(r.response.URL.pathExtension);
-        if (audio) { h((WKNavigationResponsePolicy)2); return; }
+        static NSSet *audioExts;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{ audioExts = [NSSet setWithObjects:@"mp3", @"m4a", @"wav", @"aac", @"flac", nil]; });
+        BOOL audio = [mime hasPrefix:@"audio/"] || [audioExts containsObject:ext.lowercaseString] || [audioExts containsObject:r.response.URL.pathExtension.lowercaseString];
+        if (audio) { 
+            h((WKNavigationResponsePolicy)2); 
+            return; 
+        }
     }
     h(WKNavigationResponsePolicyAllow);
 }
@@ -579,11 +595,6 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     NSURL *dest = self.dests[k];
     [self.dests removeObjectForKey:k];
     if (!dest) return;
-    if (!EchoIsAudioExt(dest.pathExtension)) {
-        [[NSFileManager defaultManager] removeItemAtURL:dest error:nil];
-        self.status.text = [NSString stringWithFormat:@"❌ هذا مو ملف صوت (%@)", dest.pathExtension];
-        return;
-    }
     NSString *name = [[dest.lastPathComponent stringByDeletingPathExtension] copy];
     void (^cb)(NSURL *, NSString *) = self.onPick;
     [self dismissViewControllerAnimated:YES completion:^{ if (cb) cb(dest, name); }];
@@ -595,13 +606,16 @@ static BOOL EchoIsAudioExt(NSString *ext) {
 }
 
 - (void)webView:(WKWebView *)wv didFinishNavigation:(WKNavigation *)n {
-    if (wv == self.web && wv.URL) self.addr.text = wv.URL.absoluteString;
+    if (wv == self.web && wv.URL) {
+        self.addr.text = wv.URL.absoluteString;
+        [[NSUserDefaults standardUserDefaults] setObject:wv.URL.absoluteString forKey:kLastURLKey];
+    }
     [self refreshTabBar];
 }
 
 @end
 
-#pragma mark - الواجهة
+#pragma mark - الواجهة الرئيسية
 
 @interface EchoController : UIViewController <UIDocumentPickerDelegate> {
     UISlider *_sl[S_COUNT];
@@ -940,7 +954,7 @@ static BOOL EchoIsAudioExt(NSString *ext) {
     [self addToggle:T_SONGECHO to:tabMusic x:16 y:y width:w]; y += 36;
     [self addToggle:T_MONITOR  to:tabMusic x:16 y:y width:w]; y += 40;
     y = [self addSlider:S_MONVOL to:tabMusic y:y];
-    y = [self addHint:@"🌐 المتصفح: يحتوي على نافذة يوتيوب و SaveMP3 لتحميل وتشغيل المقاطع."
+    y = [self addHint:@"🌐 المتصفح: ابحث، تصفح مواقع MP3، وحمّل المقاطع مباشرة."
                    to:tabMusic y:y height:60];
     tabMusic.contentSize = CGSizeMake(kPanelW, y + 10);
 
@@ -1267,6 +1281,20 @@ static void echo_ui_init(void) {
         echo_setup_window();
         echo_monitor_sync();
     }];
+    
+    [nc addObserverForName:AVAudioSessionRouteChangeNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *n) {
+        echo_monitor_stop();
+        DiscordEcho_ResetAll();
+        if (echo_mon_wanted()) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                echo_monitor_sync();
+            });
+        }
+    }];
+
     [nc addObserverForName:AVAudioEngineConfigurationChangeNotification
                     object:nil
                      queue:[NSOperationQueue mainQueue]
