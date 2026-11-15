@@ -304,16 +304,18 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - متصفح داخلي (مفتوح النوافذ ويقبل الروابط المباشرة والبحث)
+#pragma mark - متصفح داخلي (مع شاشة منقسمة، تبويبات غير محدودة، وتحميل مباشر)
 
 @interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
 @property (nonatomic, strong) NSMutableArray<WKWebView *> *tabs;
 @property (nonatomic) NSInteger cur;
+@property (nonatomic) BOOL isSplitScreen; // خاصية الشاشة المنقسمة
 @property (nonatomic, strong) UIScrollView *tabBar;
 @property (nonatomic, strong) UITextField *addr;
 @property (nonatomic, strong) UIButton *closeBtn;
 @property (nonatomic, strong) UIButton *backBtn;
+@property (nonatomic, strong) UIButton *splitBtn; // زر التقسيم
 @property (nonatomic, strong) NSArray<UIButton *> *quick;
 @property (nonatomic, strong) UILabel *status;
 @property (nonatomic, strong) NSMutableDictionary<NSValue *, NSURL *> *dests;
@@ -342,11 +344,15 @@ static NSString *EchoTime(float s) {
     self.dests = [NSMutableDictionary dictionary];
     self.tabs = [NSMutableArray array];
     self.cur = -1;
+    self.isSplitScreen = NO;
 
-    self.closeBtn = [self pill:@"✕ إغلاق" action:@selector(closeTapped) tag:0];
     self.backBtn = [self pill:@"◀︎ رجوع" action:@selector(backTapped) tag:0];
-    [self.view addSubview:self.closeBtn];
+    self.splitBtn = [self pill:@"▤ تقسيم" action:@selector(splitTapped) tag:0];
+    self.closeBtn = [self pill:@"✕ إغلاق" action:@selector(closeTapped) tag:0];
+    
     [self.view addSubview:self.backBtn];
+    [self.view addSubview:self.splitBtn];
+    [self.view addSubview:self.closeBtn];
 
     self.addr = [[UITextField alloc] init];
     self.addr.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
@@ -365,7 +371,7 @@ static NSString *EchoTime(float s) {
     [self.view addSubview:self.addr];
 
     NSMutableArray *q = [NSMutableArray array];
-    NSArray *names = @[@"YouTube", @"SaveMP3"];
+    NSArray *names = @[@"YouTube", @"YT5s"];
     for (NSInteger i = 0; i < 2; i++) {
         UIButton *b = [self pill:names[i] action:@selector(quickTapped:) tag:i];
         [self.view addSubview:b];
@@ -382,16 +388,18 @@ static NSString *EchoTime(float s) {
     self.status.font = [UIFont systemFontOfSize:12];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
     self.status.numberOfLines = 2;
-    self.status.text = @"ابحث براحتك، افتح أي موقع MP3، وحمّل الملفات لصوتيات الديسكورد.";
+    self.status.text = @"استخدم الشاشة المنقسمة لعرض اليوتيوب وموقع التحميل معًا بكل سهولة.";
     [self.view addSubview:self.status];
 
     NSString *savedURL = [[NSUserDefaults standardUserDefaults] stringForKey:kLastURLKey];
 
+    // التبويب الأول: يوتيوب
     [self openTabWithConfig:nil];
     [self loadText:(savedURL.length > 0 ? savedURL : @"https://www.youtube.com")];
 
+    // التبويب الثاني: موقع التحميل الجديد المطلوب
     [self openTabWithConfig:nil];
-    [self loadText:@"https://ar.savemp3.net/jaqeh/youtube-video-to-mp3/"];
+    [self loadText:@"https://yt5s.in/ar270/"];
 
     [self selectTab:0];
 }
@@ -400,15 +408,43 @@ static NSString *EchoTime(float s) {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds;
     CGFloat top = 10;
-    self.backBtn.frame = CGRectMake(12, top, 84, 34);
-    self.closeBtn.frame = CGRectMake(b.size.width - 96, top, 84, 34);
-    CGFloat qx = 104, qw = (b.size.width - 104 - 104 - 6) / 2.0;
-    for (NSInteger i = 0; i < 2; i++) self.quick[i].frame = CGRectMake(qx + i * (qw + 6), top, qw, 34);
+    
+    // ترتيب الأزرار العلوية بشكل متناسق
+    self.backBtn.frame = CGRectMake(12, top, 56, 34);
+    self.splitBtn.frame = CGRectMake(74, top, 64, 34);
+    self.closeBtn.frame = CGRectMake(b.size.width - 72, top, 60, 34);
+    
+    CGFloat qx = 144, qw = (b.size.width - 144 - 76 - 6) / 2.0;
+    for (NSInteger i = 0; i < 2; i++) {
+        self.quick[i].frame = CGRectMake(qx + i * (qw + 4), top, qw, 34);
+    }
+    
     self.addr.frame = CGRectMake(12, 50, b.size.width - 24, 36);
     self.tabBar.frame = CGRectMake(0, 92, b.size.width, 34);
+    
     CGFloat sh = 44;
-    CGRect wf = CGRectMake(0, 130, b.size.width, b.size.height - 130 - sh);
-    for (WKWebView *w in self.tabs) w.frame = wf;
+    CGFloat startY = 130;
+    CGFloat totalH = b.size.height - startY - sh;
+
+    // منطق الشاشة المنقسمة أو العرض الفردي للتبويبات
+    if (self.isSplitScreen && self.tabs.count >= 2) {
+        CGFloat halfW = b.size.width / 2.0;
+        self.tabs[0].hidden = NO;
+        self.tabs[1].hidden = NO;
+        self.tabs[0].frame = CGRectMake(0, startY, halfW - 1, totalH);
+        self.tabs[1].frame = CGRectMake(halfW + 1, startY, halfW - 1, totalH);
+        for (NSInteger i = 2; i < (NSInteger)self.tabs.count; i++) {
+            self.tabs[i].hidden = YES;
+        }
+    } else {
+        CGRect wf = CGRectMake(0, startY, b.size.width, totalH);
+        for (NSInteger i = 0; i < (NSInteger)self.tabs.count; i++) {
+            WKWebView *w = self.tabs[i];
+            w.hidden = (i != self.cur);
+            w.frame = wf;
+        }
+    }
+    
     self.status.frame = CGRectMake(12, b.size.height - sh, b.size.width - 24, sh);
 }
 
@@ -428,7 +464,9 @@ static NSString *EchoTime(float s) {
 - (void)selectTab:(NSInteger)i {
     if (i < 0 || i >= (NSInteger)self.tabs.count) return;
     self.cur = i;
-    for (NSInteger k = 0; k < (NSInteger)self.tabs.count; k++) self.tabs[k].hidden = (k != i);
+    if (!self.isSplitScreen) {
+        for (NSInteger k = 0; k < (NSInteger)self.tabs.count; k++) self.tabs[k].hidden = (k != i);
+    }
     NSURL *u = self.web.URL;
     self.addr.text = u ? u.absoluteString : @"";
     [self refreshTabBar];
@@ -439,11 +477,11 @@ static NSString *EchoTime(float s) {
     CGFloat x = 8;
     for (NSInteger i = 0; i < (NSInteger)self.tabs.count; i++) {
         NSString *t = self.tabs[i].title;
-        if (t.length == 0) t = (i == 0) ? @"YouTube" : (i == 1 ? @"SaveMP3" : @"نافذة");
+        if (t.length == 0) t = (i == 0) ? @"YouTube" : (i == 1 ? @"YT5s" : @"نافذة");
         if (t.length > 14) t = [[t substringToIndex:14] stringByAppendingString:@"…"];
         UIButton *b = [self pill:t action:@selector(tabTapped:) tag:i];
         b.frame = CGRectMake(x, 0, 104, 32);
-        if (i == self.cur) b.backgroundColor = [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95];
+        if (i == self.cur && !self.isSplitScreen) b.backgroundColor = [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95];
         [self.tabBar addSubview:b];
         x += 110;
     }
@@ -458,7 +496,20 @@ static NSString *EchoTime(float s) {
     self.tabBar.contentSize = CGSizeMake(x + 8, 34);
 }
 
-- (void)tabTapped:(UIButton *)b { [self selectTab:b.tag]; }
+- (void)tabTapped:(UIButton *)b {
+    [self selectTab:b.tag];
+    if (self.isSplitScreen) {
+        // إذا كان مقسم، نجعل التبويب المحدد هو النصف الأول مثلاً أو نبقيه
+    }
+}
+
+- (void)splitTapped {
+    self.isSplitScreen = !self.isSplitScreen;
+    [self.splitBtn setTitle:self.isSplitScreen ? @"🪟 فردي" : @"▤ تقسيم" forState:UIControlStateNormal];
+    self.splitBtn.backgroundColor = self.isSplitScreen ? [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95] : [UIColor colorWithWhite:1 alpha:0.14];
+    [self.view setNeedsLayout];
+    [self.view layoutIfNeeded];
+}
 
 - (void)addTabTapped {
     [self openTabWithConfig:nil];
@@ -475,7 +526,6 @@ static NSString *EchoTime(float s) {
     [self selectTab:n];
 }
 
-// فتح النوافذ الجديدة والروابط المنبثقة بحرية داخل المتصفح
 - (WKWebView *)webView:(WKWebView *)wv createWebViewWithConfiguration:(WKWebViewConfiguration *)cfg
    forNavigationAction:(WKNavigationAction *)a windowFeatures:(WKWindowFeatures *)f {
     if (a.targetFrame == nil || !a.targetFrame.isMainFrame) {
@@ -498,7 +548,7 @@ static NSString *EchoTime(float s) {
 - (void)backTapped { if (self.web.canGoBack) [self.web goBack]; }
 
 - (void)quickTapped:(UIButton *)b {
-    NSArray *urls = @[@"https://www.youtube.com", @"https://ar.savemp3.net/jaqeh/youtube-video-to-mp3/"];
+    NSArray *urls = @[@"https://www.youtube.com", @"https://yt5s.in/ar270/"];
     [self loadText:urls[b.tag]];
 }
 
@@ -511,7 +561,6 @@ static NSString *EchoTime(float s) {
     } else if ([t containsString:@"."] && ![t containsString:@" "]) {
         u = [NSURL URLWithString:[@"https://" stringByAppendingString:t]];
     } else {
-        // إذا كتب كلمات وليست رابطاً، ابحث عنها في قوقل مباشرة
         NSURLComponents *c = [NSURLComponents componentsWithString:@"https://www.google.com/search"];
         c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"q" value:t] ];
         u = c.URL;
@@ -615,7 +664,7 @@ static NSString *EchoTime(float s) {
 
 @end
 
-#pragma mark - الواجهة الرئيسية
+#pragma mark - الواجهة الرئيسية (تبقى كما هي بقية الملف)
 
 @interface EchoController : UIViewController <UIDocumentPickerDelegate> {
     UISlider *_sl[S_COUNT];
