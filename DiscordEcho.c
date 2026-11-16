@@ -1,10 +1,10 @@
 // DiscordEcho: معالج صوت المايك داخل تطبيق (مثل ديسكورد)
-//   - تغيير النبرة (pitch) من -12 إلى +12 نغمة + صوت روبوت
+//   - تغيير النبرة (pitch) من -12 إلى +12 نغمة + شكل الصوت (فورمانت) لصوت بنت/رجل طبيعي + صوت روبوت
 //   - صدى "كهف مسكون": تكرار مبعثر (Multi-Tap Delay) + كهف (reverb) مع تحكم كامل
 //   - موازن ترددات (EQ) للصدى + تغميق الذيل + تنعيم الموجة (modulation)
 //   - مودات صدى جاهزة، كل واحد لحاله: ديلاي، ديلاي شريط، غرفة، قاعة، ستاديوم، فضاء
 //   - تضخيم الصوت 100%..1600% مع حد ناعم
-//   - مشغّل أغنية (بما فيها اليوتيوب): تتمزج داخل المايك + يطبّق عليها الصدى + تسمعها أنت (مراقبة)
+//   - مشغّل أغنية (ملفات): تتمزج داخل المايك + يطبّق عليها الصدى + تسمعها أنت (مراقبة)
 // يعمل عبر fishhook: يستبدل AudioUnitRender ويعدّل بيانات المايك قبل ما يرسلها التطبيق.
 
 #include <AudioToolbox/AudioToolbox.h>
@@ -45,6 +45,7 @@ static volatile int   g_monitor = 0;    // أنت تسمع الأغنية
 static volatile int   g_mon_vol = 100;  // مستوى المراقبة 0..200
 static volatile int   g_gain  = 100;    // تضخيم الصوت 100..1600 (%)
 static volatile int   g_pitch = 0;      // نغمات -12..12
+static volatile int   g_formant = 0;    // شكل الصوت (فورمانت) -30..+30 (%)
 static volatile int   g_robot = 0;      // 0/1
 static volatile int   g_voice_mute = 0; // كتم صوتي أثناء الأغنية
 static volatile float g_peak  = 0.0f;   // مستوى المايك 0..1
@@ -78,6 +79,7 @@ void DiscordEcho_SetMonitor(int on) { g_monitor = on ? 1 : 0; }
 void DiscordEcho_SetMonitorVolume(int v) { g_mon_vol = clampi(v, 0, 200); }
 void DiscordEcho_SetGain(int v)   { g_gain = clampi(v, 100, 1600); }
 void DiscordEcho_SetPitch(int v)  { g_pitch = clampi(v, -12, 12); }
+void DiscordEcho_SetFormant(int v) { g_formant = clampi(v, -30, 30); }
 void DiscordEcho_SetRobot(int on) { g_robot = on ? 1 : 0; }
 void DiscordEcho_SetVoiceMute(int on) { g_voice_mute = on ? 1 : 0; }
 float DiscordEcho_GetPeak(void)   { return g_peak; }
@@ -114,19 +116,285 @@ static int g_cleared[NCTX];
 
 static void clear_ctx(int idx) { memset(&g_ctx[idx], 0, sizeof(g_ctx[idx])); }
 
-#define PS_WIN 2048
-#define PS_BUF 4096
-typedef struct {
-    float buf[PS_BUF];
-    unsigned w;
-    float d;
-} PitchShifter;
-
-static PitchShifter g_ps[MAX_BUFS];
-static int g_ps_on[MAX_BUFS];
 static float g_win[1025];
 static float g_robot_phase;
 static float g_stail = 0.0f;
+
+// ---------- مغيّر الصوت (بنت / رجل): نبرة + شكل الصوت (فورمانت) ----------
+// الفكرة: نفصل صوتك إلى "مصدر" (النبرة) و"فلتر" (شكل الفم والحلق) بتحليل LPC على 16kHz،
+// نغيّر النبرة في المصدر لحاله، ونحرّك ترددات الفلتر (الفورمانت) بنسبة مستقلة.
+// بهذا ما يطلع صوت سنجاب: النبرة تعلى بدون ما يتضخّم شكل الصوت أكثر من اللازم.
+#define VS_RATE   16000.0f
+#define VS_ORD    16
+#define VS_HOP    160          // 10ms
+#define VS_WINLEN 400          // 25ms
+#define VS_RING   512
+#define PS2_WIN   512          // 32ms
+#define PS2_BUF   2048
+
+typedef struct { float x1, x2, y1, y2; } BqS;
+typedef struct { float b0, b1, b2, a1, a2; } BqC;
+
+typedef struct {
+    float rate;
+    int init;
+    BqC lc[2];
+    BqS ins[2], outs[2];
+    double ph;
+    float xp, o0, o1;
+    float pre, ypre;
+    float ring[VS_RING];
+    unsigned rw;
+    int hop;
+    float a[VS_ORD], b[VS_ORD];     // a: تحليل (المصدر)، b: تركيب (الفلتر بعد تحريك الفورمانت)
+    float sh[VS_ORD], yh[VS_ORD];
+    float psb[PS2_BUF];
+    unsigned psw;
+    float psd;
+    float ein, eout, g;
+    float hg, hgs;                  // تعويض كسب الفلتر بعد تحريك الفورمانت
+} VoiceShifter;
+
+static VoiceShifter g_vs[MAX_BUFS];
+static int g_vs_on[MAX_BUFS];
+
+static void bq_design(BqC *c, float fc, float fs, float q) {
+    float w0 = 6.2831853f * fc / fs, cw = cosf(w0), al = sinf(w0) / (2.0f * q);
+    float a0 = 1.0f + al;
+    c->b0 = (1.0f - cw) * 0.5f / a0;
+    c->b1 = (1.0f - cw) / a0;
+    c->b2 = c->b0;
+    c->a1 = -2.0f * cw / a0;
+    c->a2 = (1.0f - al) / a0;
+}
+static float bq_run(BqS *s, const BqC *c, float x) {
+    float y = c->b0 * x + c->b1 * s->x1 + c->b2 * s->x2 - c->a1 * s->y1 - c->a2 * s->y2;
+    s->x2 = s->x1; s->x1 = x; s->y2 = s->y1; s->y1 = y;
+    return y;
+}
+
+static float ps2_tap(const VoiceShifter *v, float d) {
+    int di = (int)d;
+    float fr = d - (float)di;
+    float a = v->psb[(v->psw - (unsigned)di) & (PS2_BUF - 1)];
+    float b = v->psb[(v->psw - (unsigned)di - 1u) & (PS2_BUF - 1)];
+    return a + fr * (b - a);
+}
+static float ps2_process(VoiceShifter *v, float x, float ratio) {
+    v->psb[v->psw & (PS2_BUF - 1)] = x;
+    float d1 = v->psd;
+    float d2 = d1 + PS2_WIN * 0.5f;
+    if (d2 >= PS2_WIN) d2 -= PS2_WIN;
+    float y = g_win[(int)(d1 * (1024.0f / PS2_WIN))] * ps2_tap(v, d1)
+            + g_win[(int)(d2 * (1024.0f / PS2_WIN))] * ps2_tap(v, d2);
+    v->psw++;
+    v->psd += 1.0f - ratio;
+    if (v->psd >= PS2_WIN) v->psd -= PS2_WIN;
+    if (v->psd < 0.0f) v->psd += PS2_WIN;
+    return y;
+}
+
+typedef struct { double re, im; } Cx;
+static Cx cx_mul(Cx a, Cx b) { Cx r = { a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re }; return r; }
+static Cx cx_div(Cx a, Cx b) {
+    double d = b.re * b.re + b.im * b.im + 1e-300;
+    Cx r = { (a.re * b.re + a.im * b.im) / d, (a.im * b.re - a.re * b.im) / d };
+    return r;
+}
+
+// جذور كثيرة حدود monic: z^n + c[1] z^(n-1) + ... + c[n]  (طريقة Durand-Kerner)
+static int poly_roots(const double *c, int n, Cx *z) {
+    for (int i = 0; i < n; i++) {
+        double ang = 6.283185307 * (double)i / (double)n + 0.4;
+        z[i].re = 0.8 * cos(ang);
+        z[i].im = 0.8 * sin(ang);
+    }
+    double maxd = 1.0;
+    for (int it = 0; it < 120 && maxd > 1e-11; it++) {
+        maxd = 0.0;
+        for (int i = 0; i < n; i++) {
+            Cx p = { 1.0, 0.0 };
+            for (int k = 1; k <= n; k++) {          // Horner
+                Cx t = cx_mul(p, z[i]);
+                t.re += c[k];
+                p = t;
+            }
+            Cx den = { 1.0, 0.0 };
+            for (int j = 0; j < n; j++) {
+                if (j == i) continue;
+                Cx d = { z[i].re - z[j].re, z[i].im - z[j].im };
+                den = cx_mul(den, d);
+            }
+            Cx dl = cx_div(p, den);
+            z[i].re -= dl.re;
+            z[i].im -= dl.im;
+            double m = fabs(dl.re) + fabs(dl.im);
+            if (m > maxd) maxd = m;
+        }
+    }
+    return maxd < 1e-6;
+}
+
+// يحلّل آخر 25ms ويحسب فلتر المصدر a وفلتر التركيب b (بعد تحريك الفورمانت بنسبة alpha)
+static void vs_analyze(VoiceShifter *v, float alpha) {
+    double w[VS_WINLEN], r[VS_ORD + 1];
+    for (int i = 0; i < VS_WINLEN; i++) {
+        unsigned idx = (v->rw - (unsigned)VS_WINLEN + (unsigned)i) & (VS_RING - 1);
+        double h = 0.54 - 0.46 * cos(6.283185307 * (double)i / (double)(VS_WINLEN - 1));
+        w[i] = (double)v->ring[idx] * h;
+    }
+    for (int k = 0; k <= VS_ORD; k++) {
+        double acc = 0.0;
+        for (int i = k; i < VS_WINLEN; i++) acc += w[i] * w[i - k];
+        r[k] = acc;
+    }
+    if (r[0] < 1e-7) {                       // صمت: بدون فلتر
+        memset(v->a, 0, sizeof(v->a));
+        memset(v->b, 0, sizeof(v->b));
+        return;
+    }
+    r[0] = r[0] * 1.0001 + 1e-9;
+    double c[VS_ORD + 1], tmp[VS_ORD + 1];
+    memset(c, 0, sizeof(c));
+    c[0] = 1.0;
+    double e = r[0];
+    for (int i = 1; i <= VS_ORD; i++) {
+        double acc = r[i];
+        for (int j = 1; j < i; j++) acc += c[j] * r[i - j];
+        double k = -acc / e;
+        memcpy(tmp, c, sizeof(c));
+        for (int j = 1; j < i; j++) c[j] = tmp[j] + k * tmp[i - j];
+        c[i] = k;
+        e *= (1.0 - k * k);
+        if (e < 1e-12) break;
+    }
+    double g = 1.0;
+    for (int j = 1; j <= VS_ORD; j++) { g *= 0.98; c[j] *= g; }     // توسيع عرض النطاق (ثبات)
+
+    for (int j = 1; j <= VS_ORD; j++) v->a[j - 1] = (float)(-c[j]);
+
+    int warp = fabsf(alpha - 1.0f) > 0.005f;
+    Cx z[VS_ORD];
+    if (warp && poly_roots(c, VS_ORD, z)) {
+        for (int i = 0; i < VS_ORD; i++) {
+            double rad = sqrt(z[i].re * z[i].re + z[i].im * z[i].im);
+            double th = atan2(z[i].im, z[i].re);
+            if (rad > 0.995) rad = 0.995;
+            if (fabs(th) > 1e-3) {
+                double t2 = fabs(th) * (double)alpha;
+                if (t2 > 3.0) t2 = 3.0;
+                th = th < 0 ? -t2 : t2;
+            }
+            z[i].re = rad * cos(th);
+            z[i].im = rad * sin(th);
+        }
+        Cx p[VS_ORD + 1];
+        memset(p, 0, sizeof(p));
+        p[0].re = 1.0;
+        for (int i = 0; i < VS_ORD; i++) {      // p = p * (z - root)
+            for (int k = i + 1; k >= 1; k--) {
+                p[k].re -= p[k - 1].re * z[i].re - p[k - 1].im * z[i].im;
+                p[k].im -= p[k - 1].re * z[i].im + p[k - 1].im * z[i].re;
+            }
+        }
+        for (int j = 1; j <= VS_ORD; j++) v->b[j - 1] = (float)(-p[j].re);
+    } else {
+        memcpy(v->b, v->a, sizeof(v->b));
+    }
+
+    // كسب الفلترين (طاقة الاستجابة النبضية) عشان يبقى مستوى الصوت ثابت بعد التحريك
+    float ha[VS_ORD] = {0}, hb[VS_ORD] = {0};
+    double ea = 1.0, eb = 1.0;
+    float ypa = 0.0f, ypb = 0.0f;
+    for (int n = 0; n < 400; n++) {
+        float ya = (n == 0) ? 1.0f : 0.0f, yb = ya;
+        for (int k = 0; k < VS_ORD; k++) { ya += v->a[k] * ha[k]; yb += v->b[k] * hb[k]; }
+        memmove(&ha[1], &ha[0], (VS_ORD - 1) * sizeof(float)); ha[0] = ya;
+        memmove(&hb[1], &hb[0], (VS_ORD - 1) * sizeof(float)); hb[0] = yb;
+        ypa = ya + 0.97f * ypa; ypb = yb + 0.97f * ypb;      // مع de-emphasis (المستوى النهائي)
+        if (n > 0) { ea += (double)ypa * ypa; eb += (double)ypb * ypb; }
+        if (!(ya == ya) || !(yb == yb)) { ea = eb = 1.0; break; }
+    }
+    float tg = (float)sqrt(ea / eb);
+    if (tg > 8.0f) tg = 8.0f;
+    if (tg < 0.125f) tg = 0.125f;
+    v->hg = tg;
+}
+
+static void vs_init(VoiceShifter *v, float rate) {
+    memset(v, 0, sizeof(*v));
+    v->rate = rate;
+    v->init = 1;
+    v->g = 1.0f;
+    v->hg = v->hgs = 1.0f;
+    float fc = 7000.0f;
+    if (fc > rate * 0.45f) fc = rate * 0.45f;
+    bq_design(&v->lc[0], fc, rate, 0.5412f);
+    bq_design(&v->lc[1], fc, rate, 1.3065f);
+}
+
+// يشتغل على 16kHz: عينة وحدة بالدخل، عينة وحدة بالخرج
+static float vs_core(VoiceShifter *v, float x, float ratio, float alpha) {
+    float s = x - 0.97f * v->pre;           // pre-emphasis
+    v->pre = x;
+    v->ring[v->rw & (VS_RING - 1)] = s;
+    v->rw++;
+    if (++v->hop >= VS_HOP) { v->hop = 0; vs_analyze(v, alpha); }
+
+    float pred = 0.0f;
+    for (int k = 0; k < VS_ORD; k++) pred += v->a[k] * v->sh[k];
+    float e = s - pred;                      // المصدر (excitation)
+    memmove(&v->sh[1], &v->sh[0], (VS_ORD - 1) * sizeof(float));
+    v->sh[0] = s;
+
+    float e2 = ps2_process(v, e, ratio);     // نغيّر النبرة في المصدر
+
+    float syn = e2;
+    for (int k = 0; k < VS_ORD; k++) syn += v->b[k] * v->yh[k];
+    if (!(syn == syn) || syn > 30.0f || syn < -30.0f) {   // حماية
+        memset(v->yh, 0, sizeof(v->yh));
+        memset(v->sh, 0, sizeof(v->sh));
+        syn = 0.0f;
+    }
+    memmove(&v->yh[1], &v->yh[0], (VS_ORD - 1) * sizeof(float));
+    v->yh[0] = syn;
+
+    v->hgs += (v->hg - v->hgs) * 0.01f;
+    float y = syn * v->hgs + 0.97f * v->ypre;         // de-emphasis
+    v->ypre = y;
+
+    // تعويض المستوى (بطيء) عشان ما يعلى أو يخف الصوت بعد تحريك الفورمانت
+    v->ein  += (x * x - v->ein) * 0.0006f;
+    v->eout += (y * y - v->eout) * 0.0006f;
+    float tg = 1.0f;
+    if (v->eout > 1e-9f && v->ein > 1e-9f) tg = sqrtf(v->ein / v->eout);
+    if (tg > 3.0f) tg = 3.0f;
+    if (tg < 0.2f) tg = 0.2f;
+    v->g += (tg - v->g) * 0.002f;
+    return y * v->g;
+}
+
+static float vs_process(VoiceShifter *v, float x, float rate, float ratio, float alpha) {
+    if (!v->init || v->rate != rate) vs_init(v, rate);
+    int rs = rate > VS_RATE + 1.0f;
+    float step = rs ? VS_RATE / rate : 1.0f;
+    float xf = x;
+    if (rs) { xf = bq_run(&v->ins[0], &v->lc[0], xf); xf = bq_run(&v->ins[1], &v->lc[1], xf); }
+    double ph_old = v->ph;
+    v->ph += step;
+    if (v->ph >= 1.0) {
+        v->ph -= 1.0;
+        float frac = (float)((1.0 - ph_old) / step);
+        float xi = v->xp + frac * (xf - v->xp);
+        v->o0 = v->o1;
+        v->o1 = vs_core(v, xi, ratio, alpha);
+    }
+    v->xp = xf;
+    float y = v->o0 + (float)v->ph * (v->o1 - v->o0);
+    if (rs) { y = bq_run(&v->outs[0], &v->lc[0], y); y = bq_run(&v->outs[1], &v->lc[1], y); }
+    return y;
+}
+
 
 void DiscordEcho_ResetAll(void) {
     for (int i = 0; i < NCTX; i++) {
@@ -134,8 +402,8 @@ void DiscordEcho_ResetAll(void) {
         g_cleared[i] = 1;
     }
     for (int i = 0; i < MAX_BUFS; i++) {
-        memset(&g_ps[i], 0, sizeof(g_ps[i]));
-        g_ps_on[i] = 0;
+        memset(&g_vs[i], 0, sizeof(g_vs[i]));
+        g_vs_on[i] = 0;
     }
     g_robot_phase = 0.0f;
     g_stail = 0.0f;
@@ -339,28 +607,6 @@ static float echo_run(EchoCtx *c, float y, const EchoParams *P) {
     return lo * P->eq_gl + (lp2 - lo) * P->eq_gm + (wet - lp2) * P->eq_gh;
 }
 
-static float ps_tap(const PitchShifter *ps, float d) {
-    int di = (int)d;
-    float fr = d - (float)di;
-    float a = ps->buf[(ps->w - (unsigned)di) & (PS_BUF - 1)];
-    float b = ps->buf[(ps->w - (unsigned)di - 1u) & (PS_BUF - 1)];
-    return a + fr * (b - a);
-}
-
-static float ps_process(PitchShifter *ps, float x, float ratio) {
-    ps->buf[ps->w & (PS_BUF - 1)] = x;
-    float d1 = ps->d;
-    float d2 = d1 + PS_WIN * 0.5f;
-    if (d2 >= PS_WIN) d2 -= PS_WIN;
-    float y = g_win[(int)(d1 * (1024.0f / PS_WIN))] * ps_tap(ps, d1)
-            + g_win[(int)(d2 * (1024.0f / PS_WIN))] * ps_tap(ps, d2);
-    ps->w++;
-    ps->d += 1.0f - ratio;
-    if (ps->d >= PS_WIN) ps->d -= PS_WIN;
-    if (ps->d < 0.0f) ps->d += PS_WIN;
-    return y;
-}
-
 // ---------- مشغّل الأغنية ----------
 typedef struct { float *data; size_t len; } MusicSlot;
 static MusicSlot g_mslot[2];
@@ -527,7 +773,8 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
     int semis = g_pitch;
 
     int echo_on = echo_enabled();
-    int ps_on = (semis != 0) && chans == 1;
+    int fm = g_formant;
+    int ps_on = (semis != 0 || fm != 0) && chans == 1;     // النبرة والفورمانت للمايك الأحادي فقط
     int robot_on = g_robot && chans == 1;
     int mute = g_voice_mute && mus != NULL;
     int changed = echo_on || ps_on || robot_on || gn != 100 || mus != NULL;
@@ -543,7 +790,7 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
         }
         update_peak(pk);
         if (!g_cleared[idx]) { clear_ctx(idx); g_cleared[idx] = 1; }
-        g_ps_on[idx] = 0;
+        g_vs_on[idx] = 0;
         return;
     }
 
@@ -553,12 +800,13 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
         g_cleared[idx] = 0;
     }
 
-    PitchShifter *ps = &g_ps[idx];
+    VoiceShifter *vs = &g_vs[idx];
     if (ps_on) {
-        if (!g_ps_on[idx]) { memset(ps, 0, sizeof(*ps)); g_ps_on[idx] = 1; }
+        if (!g_vs_on[idx]) { memset(vs, 0, sizeof(*vs)); g_vs_on[idx] = 1; }
     } else {
-        g_ps_on[idx] = 0;
+        g_vs_on[idx] = 0;
     }
+    float alpha = 1.0f + (float)fm / 100.0f;
 
     float rate = (float)g_fmt.mSampleRate;
     if (rate < 8000.0f) rate = 48000.0f;
@@ -579,7 +827,7 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
                            : ((int16_t *)ab->mData)[i] / 32768.0f;
         float y = mute ? 0.0f : x;
 
-        if (ps_on) y = ps_process(ps, y, ratio);
+        if (ps_on) y = vs_process(vs, y, rate, ratio, alpha);
 
         if (robot_on) {
             y *= 1.4f * sinf(g_robot_phase);
