@@ -19,7 +19,7 @@ extern void DiscordEcho_SetTapScatter(int v);
 extern void DiscordEcho_SetDamp(int v);
 extern void DiscordEcho_SetMod(int v);
 extern void DiscordEcho_SetEqLoFreq(int v);
-extern void DiscordEcho_SetEqHiFreq(int v);
+extern void DiscordEcho_SetEqHiFreq(int v); // تم التصحيح هنا ليتوافق تماماً
 extern void DiscordEcho_SetEqLo(int v);
 extern void DiscordEcho_SetEqMid(int v);
 extern void DiscordEcho_SetEqHi(int v);
@@ -99,7 +99,7 @@ static const SliderSpec kSliders[S_COUNT] = {
     [S_TAPFB]    = { @"عدد التكرارات",         @"",     @"DiscordEchoTapFb",   0, 100,  60, DiscordEcho_SetTapFeedback,   nil },
     [S_TAPSCAT]  = { @"التبعثر",               @"",     @"DiscordEchoTapScat", 0, 100, 100, DiscordEcho_SetTapScatter,    nil },
     [S_EQLOF]    = { @"حد الجهير",             @" Hz",  @"DiscordEchoEqLoF",  60, 800, 200, DiscordEcho_SetEqLoFreq,      nil },
-    [S_EQHIF]    = { @"حد الحاد",              @" Hz",  @"DiscordEchoEqHiF", 1500, 9000, 3500, DiscordEcho_SetEqHiF,     nil },
+    [S_EQHIF]    = { @"حد الحاد",              @" Hz",  @"DiscordEchoEqHiF", 1500, 9000, 3500, DiscordEcho_SetEqHiFreq,   nil },
     [S_EQLO]     = { @"الجهير",                @"%",    @"DiscordEchoEqLo",    0, 200, 100, DiscordEcho_SetEqLo,          nil },
     [S_EQMID]    = { @"الوسط",                 @"%",    @"DiscordEchoEqMid",   0, 200, 100, DiscordEcho_SetEqMid,         nil },
     [S_EQHI]     = { @"الحاد",                 @"%",    @"DiscordEchoEqHi",    0, 200, 100, DiscordEcho_SetEqHi,          nil },
@@ -294,8 +294,6 @@ static NSString *EchoTime(float s) {
     return [NSString stringWithFormat:@"%d:%02d", t / 60, t % 60];
 }
 
-#pragma mark - نافذة شفافة تمرر اللمس لديسكورد
-
 @interface EchoWindow : UIWindow
 @end
 
@@ -306,8 +304,6 @@ static NSString *EchoTime(float s) {
     return v;
 }
 @end
-
-#pragma mark - متصفح داخلي
 
 @interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
@@ -325,7 +321,6 @@ static NSString *EchoTime(float s) {
 @end
 
 @implementation EchoBrowserController
-// (تم الاحتفاظ بجميع وظائف المتصفح والشاشة المنقسمة والتحميل المباشر كما هي في الكود الأصلي)
 - (WKWebView *)web { return (self.cur >= 0 && self.cur < (NSInteger)self.tabs.count) ? self.tabs[self.cur] : nil; }
 - (UIButton *)pill:(NSString *)t action:(SEL)a tag:(NSInteger)tag {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -529,8 +524,6 @@ static NSString *EchoTime(float s) {
     [self refreshTabBar];
 }
 @end
-
-#pragma mark - الواجهة الرئيسية
 
 @interface EchoController : UIViewController <UIDocumentPickerDelegate> {
     UISlider *_sl[S_COUNT];
@@ -746,12 +739,12 @@ static NSString *EchoTime(float s) {
     y = [self addSlider:S_EQHI to:tabEq y:y];
     tabEq.contentSize = CGSizeMake(kPanelW, y + 10);
 
-    // تبويب النبرة وصوت البنت AI (الجديد كلياً لـ M2 iPad)
+    // تبويب النبرة وصوت البنت AI
     y = 4;
     y = [self addHeader:@"✨ محرك تحويل الصوت بالذكاء الاصطناعي (M2 Neural Engine)" to:tabPitch y:y];
     [self addToggle:T_AI to:tabPitch x:16 y:y width:w];
     y += 44;
-    y = [self addHint:@"عند التفعيل، يتم تحويل نبرة صوتك الحية لصوت أنثوي طبيعي بالكامل باستخدام نموذج الذكاء الاصطناعي مع استغلال معالج M2." to:tabPitch y:y height:44];
+    y = [self addHint:@"عند التفعيل، يتم تحويل نبرة صوتك الحية لصوت أنثوي باستخدام الذكاء الاصطناعي." to:tabPitch y:y height:44];
 
     y = [self addHeader:@"🎛 النبرة الكلاسيكية والروبوت" to:tabPitch y:y];
     self.pitchLabel = [self makeLabelAt:CGRectMake(16, y, w, 22) size:14 bold:YES alpha:1];
@@ -770,7 +763,7 @@ static NSString *EchoTime(float s) {
     }
     tabPitch.contentSize = CGSizeMake(kPanelW, y + 90);
 
-    // تبويب المضخّم وسماع الصوت
+    // تبويب المضخّم وصوت المايك
     y = 4;
     y = [self addSlider:S_GAIN to:tabAmp y:y];
     y = [self addHeader:@"مستوى المايك والمراقبة" to:tabAmp y:y];
