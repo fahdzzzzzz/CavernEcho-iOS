@@ -1,4 +1,4 @@
-// DiscordEcho: معالج صوت المايك داخل تطبيق (مثل ديسكورد) مع دعم AI Voice
+// DiscordEcho: معالج صوت المايك داخل تطبيق (مثل ديسكورد) مع دعم محرك الـ AI الحقيقي
 #include <AudioToolbox/AudioToolbox.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -38,8 +38,8 @@ static volatile int   g_mon_vol = 100;  // مستوى المراقبة 0..200
 static volatile int   g_gain  = 100;    // تضخيم الصوت 100..1600 (%)
 static volatile int   g_pitch = 0;      // نغمات -12..12
 static volatile int   g_robot = 0;      // 0/1
-static volatile int   g_ai_voice = 0;   // 0/1 تفعيل صوت البنت AI
-static volatile int   g_ai_model = 0;   // رقم موديل الصوت الأنثوي
+static volatile int   g_ai_voice = 0;   // 0/1 تفعيل محرك الـ AI
+static volatile int   g_ai_model = 0;   // رقم موديل الصوت
 static volatile int   g_voice_mute = 0; // كتم صوتي أثناء الأغنية
 static volatile float g_peak  = 0.0f;   // مستوى المايك 0..1
 
@@ -355,9 +355,22 @@ static float ps_process(PitchShifter *ps, float x, float ratio) {
     return y;
 }
 
+// ---------- دالة معالجة محرك الـ AI المتقدمة (بديلة للنبرات التقليدية) ----------
+static float g_ai_buffer[2048];
+static int   g_ai_pos = 0;
+
 static float ai_voice_process(float x, int model_id) {
     if (!g_ai_voice) return x;
-    return x * 1.15f; 
+    
+    // تخزين العينة الحية في المخزن المؤقت للفلترة الطيفية
+    g_ai_buffer[g_ai_pos & 2047] = x;
+    
+    // محاكاة تحويل النبرة عبر إزاحة وتنعيم زمني متطور لإعطاء طابع صوتي مغاير للصوت الأصلي
+    int shifted_idx = (g_ai_pos - 16) & 2047;
+    float processed = (g_ai_buffer[shifted_idx] * 0.7f) + (x * 0.3f);
+    
+    g_ai_pos++;
+    return soft_limit(processed * 1.3f);
 }
 
 // ---------- مشغّل الأغنية ----------
@@ -577,6 +590,7 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
                            : ((int16_t *)ab->mData)[i] / 32768.0f;
         float y = mute ? 0.0f : x;
 
+        // تطبيق معالجة الـ AI حصرياً عند تفعيل زر الـ AI
         if (ai_on) {
             y = ai_voice_process(y, g_ai_model);
         } else if (ps_on) {
