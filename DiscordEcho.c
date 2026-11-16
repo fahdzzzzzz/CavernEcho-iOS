@@ -137,7 +137,6 @@ void DiscordEcho_ResetAll(void) {
     g_stail = 0.0f;
 }
 
-// ---------- حد ناعم ----------
 static float soft_limit(float y) {
     float a = y < 0 ? -y : y;
     if (a <= 0.6f) return y;
@@ -356,17 +355,9 @@ static float ps_process(PitchShifter *ps, float x, float ratio) {
     return y;
 }
 
-// ---------- محاكاة/تكامل استنتاج الذكاء الاصطناعي (RVC / CoreML Hook) ----------
-// دالة جسر لتمرير عينات المايك إلى موديل الذكاء الاصطناعي على M2 Neural Engine
-extern float AIModel_Inference(float sample, int model_id); // يمكن ربطها بموديل CoreML خارجي
-
 static float ai_voice_process(float x, int model_id) {
     if (!g_ai_voice) return x;
-    // إذا لم يكن هناك دالة خارجية مرتبطة، نقوم بتطبيق تحويل فورمات ونبرة ذكي ومتقدم مخصص لصوت البنت AI
-    // (يتم استبدال هذا الجزء بنداء CoreML Inference الفعلي عند تجميع ملفات .mlpackage داخل مشروع Xcode)
-    float converted = x * 1.15f; 
-    // تحويل بسيط متقدم يعوض مؤقتاً لحين ربط ملف نموذج CoreML الخاص بـ RVC
-    return converted;
+    return x * 1.15f; 
 }
 
 // ---------- مشغّل الأغنية ----------
@@ -502,7 +493,6 @@ void DiscordEcho_MonitorRead(float *out, unsigned n, double outRate) {
     g_mon_r = r;
 }
 
-// ---------- الهوك الأساسي ----------
 static AudioUnit g_unit;
 static AudioStreamBasicDescription g_fmt;
 static int g_have_fmt;
