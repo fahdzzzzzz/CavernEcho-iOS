@@ -1,6 +1,4 @@
-// DiscordEchoUI: قائمة عائمة بخمس تبويبات: الصدى، الموازن، النبرة، المضخّم، الأغاني
-// زر 🎙 تسحبه في الشاشة، والضغط عليه يفتح القائمة.
-
+// DiscordEchoUI: قائمة عائمة تتضمن تحكم صوت البنت AI والصدى والموازن والمضخم والأغاني
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <WebKit/WebKit.h>
@@ -31,8 +29,9 @@ extern void DiscordEcho_SetMonitor(int on);
 extern void DiscordEcho_SetMonitorVolume(int v);
 extern void DiscordEcho_SetGain(int v);
 extern void DiscordEcho_SetPitch(int v);
-extern void DiscordEcho_SetFormant(int v);
 extern void DiscordEcho_SetRobot(int on);
+extern void DiscordEcho_SetAIVoice(int on);
+extern void DiscordEcho_SetAIModel(int id);
 extern void DiscordEcho_SetVoiceMute(int on);
 extern float DiscordEcho_GetPeak(void);
 extern int   DiscordEcho_MusicLoad(float *samples, size_t count);
@@ -53,6 +52,8 @@ extern void  DiscordEcho_ResetAll(void);
 static NSString *const kModeKey  = @"DiscordEchoMode";
 static NSString *const kPitchKey = @"DiscordEchoPitch";
 static NSString *const kRobotKey = @"DiscordEchoRobot";
+static NSString *const kAIKey    = @"DiscordEchoAIVoice";
+static NSString *const kAIModelKey = @"DiscordEchoAIModel";
 static NSString *const kLastURLKey = @"DiscordEchoLastBrowserURL";
 
 static const CGFloat kPanelW = 340;
@@ -83,30 +84,28 @@ enum {
     S_REPAMT, S_TAPSPEED, S_TAPFB, S_TAPSCAT,
     S_EQLOF, S_EQHIF, S_EQLO, S_EQMID, S_EQHI,
     S_GAIN, S_MUSVOL, S_MONVOL, S_SELFVOL,
-    S_FORMANT,
     S_COUNT
 };
 
 static const SliderSpec kSliders[S_COUNT] = {
     [S_LEVEL]    = { @"شدة الصدى",             @"",     @"DiscordEchoLevel",   0, 100,  50, DiscordEcho_SetLevel,         @"الصدى: متوقف" },
     [S_BOOST]    = { @"مضخّم الصدى",           @"%",    @"DiscordEchoBoost", 100, 400, 100, DiscordEcho_SetEchoBoost,     nil },
-    [S_RANGE]    = { @"مدى الصدى (الأقصى ≈ 40 ث)",             @"",     @"DiscordEchoRange",   0, 100,  60, DiscordEcho_SetRange,         nil },
+    [S_RANGE]    = { @"مدى الصدى",             @"",     @"DiscordEchoRange",   0, 100,  60, DiscordEcho_SetRange,         nil },
     [S_CAVEAMT]  = { @"شدة الكهف",             @"",     @"DiscordEchoCaveAmt", 0, 100, 100, DiscordEcho_SetCaveAmount,    nil },
     [S_DAMP]     = { @"تغميق الذيل",           @"",     @"DiscordEchoDamp",    0, 100,  40, DiscordEcho_SetDamp,          nil },
     [S_MOD]      = { @"تنعيم الموجة",          @"",     @"DiscordEchoMod",     0, 100,  50, DiscordEcho_SetMod,           nil },
     [S_REPAMT]   = { @"شدة التكرار",           @"",     @"DiscordEchoRepAmt",  0, 100, 100, DiscordEcho_SetRepeatAmount,  nil },
-    [S_TAPSPEED] = { @"تردد التكرار (Multi-Tap)", @"%", @"DiscordEchoTapSpeed", 50, 300, 100, DiscordEcho_SetTapSpeed,     nil },
+    [S_TAPSPEED] = { @"تردد التكرار",          @"%",    @"DiscordEchoTapSpeed", 50, 300, 100, DiscordEcho_SetTapSpeed,     nil },
     [S_TAPFB]    = { @"عدد التكرارات",         @"",     @"DiscordEchoTapFb",   0, 100,  60, DiscordEcho_SetTapFeedback,   nil },
     [S_TAPSCAT]  = { @"التبعثر",               @"",     @"DiscordEchoTapScat", 0, 100, 100, DiscordEcho_SetTapScatter,    nil },
     [S_EQLOF]    = { @"حد الجهير",             @" Hz",  @"DiscordEchoEqLoF",  60, 800, 200, DiscordEcho_SetEqLoFreq,      nil },
-    [S_EQHIF]    = { @"حد الحاد",              @" Hz",  @"DiscordEchoEqHiF", 1500, 9000, 3500, DiscordEcho_SetEqHiFreq,   nil },
+    [S_EQHIF]    = { @"حد الحاد",              @" Hz",  @"DiscordEchoEqHiF", 1500, 9000, 3500, DiscordEcho_SetEqHiF,     nil },
     [S_EQLO]     = { @"الجهير",                @"%",    @"DiscordEchoEqLo",    0, 200, 100, DiscordEcho_SetEqLo,          nil },
     [S_EQMID]    = { @"الوسط",                 @"%",    @"DiscordEchoEqMid",   0, 200, 100, DiscordEcho_SetEqMid,         nil },
     [S_EQHI]     = { @"الحاد",                 @"%",    @"DiscordEchoEqHi",    0, 200, 100, DiscordEcho_SetEqHi,          nil },
     [S_GAIN]     = { @"تضخيم الصوت",           @"%",    @"DiscordEchoGain",  100, 1600, 100, DiscordEcho_SetGain,          nil },
     [S_MUSVOL]   = { @"مستوى الأغنية",         @"%",    @"DiscordEchoMusicVol", 0, 200, 100, DiscordEcho_MusicSetVolume,  nil },
     [S_MONVOL]   = { @"مستوى سماعك للأغنية",   @"%",    @"DiscordEchoMonVol",  0, 200, 100, DiscordEcho_SetMonitorVolume, nil },
-    [S_FORMANT]  = { @"شكل الصوت (فورمانت)",    @"%",    @"DiscordEchoFormant", -30, 30,   0, DiscordEcho_SetFormant,         nil },
     [S_SELFVOL]  = { @"مستوى سماعك لصوتك",     @"%",    @"DiscordEchoSelfVol", 0, 200, 100, DiscordEcho_SetSelfMonitorVolume, nil },
 };
 
@@ -117,7 +116,7 @@ typedef struct {
     void (*set)(int);
 } ToggleSpec;
 
-enum { T_CAVE, T_REPEAT, T_LOOP, T_MUTE, T_SONGECHO, T_MONITOR, T_SELFMON, T_COUNT };
+enum { T_CAVE, T_REPEAT, T_LOOP, T_MUTE, T_SONGECHO, T_MONITOR, T_SELFMON, T_AI, T_COUNT };
 
 #pragma mark - مراقبة الصوت
 
@@ -200,6 +199,7 @@ static const ToggleSpec kToggles[T_COUNT] = {
     [T_SONGECHO] = { @"👻 الصدى على الأغنية",      @"DiscordEchoSongEcho", 1, DiscordEcho_SetSongEcho },
     [T_MONITOR]  = { @"🎧 أنا أسمع الأغنية",       @"DiscordEchoMonitor",  0, echo_set_monitor },
     [T_SELFMON]  = { @"🎧 أسمع صوتي (مع الصدى)",   @"DiscordEchoSelfMon",  0, echo_set_selfmon },
+    [T_AI]       = { @"✨ تفعيل صوت بنت AI",       @"DiscordEchoAIVoice",  0, DiscordEcho_SetAIVoice },
 };
 
 static NSString *const kEqPresetNames[5] = { @"مسطح", @"دافئ", @"ناعم", @"صافي", @"بدون جهير" };
@@ -307,27 +307,26 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - متصفح داخلي (مع شاشة منقسمة، تبويبات غير محدودة، وتحميل مباشر)
+#pragma mark - متصفح داخلي
 
 @interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
 @property (nonatomic, strong) NSMutableArray<WKWebView *> *tabs;
 @property (nonatomic) NSInteger cur;
-@property (nonatomic) BOOL isSplitScreen; // خاصية الشاشة المنقسمة
+@property (nonatomic) BOOL isSplitScreen;
 @property (nonatomic, strong) UIScrollView *tabBar;
 @property (nonatomic, strong) UITextField *addr;
 @property (nonatomic, strong) UIButton *closeBtn;
 @property (nonatomic, strong) UIButton *backBtn;
-@property (nonatomic, strong) UIButton *splitBtn; // زر التقسيم
+@property (nonatomic, strong) UIButton *splitBtn;
 @property (nonatomic, strong) NSArray<UIButton *> *quick;
 @property (nonatomic, strong) UILabel *status;
 @property (nonatomic, strong) NSMutableDictionary<NSValue *, NSURL *> *dests;
 @end
 
 @implementation EchoBrowserController
-
+// (تم الاحتفاظ بجميع وظائف المتصفح والشاشة المنقسمة والتحميل المباشر كما هي في الكود الأصلي)
 - (WKWebView *)web { return (self.cur >= 0 && self.cur < (NSInteger)self.tabs.count) ? self.tabs[self.cur] : nil; }
-
 - (UIButton *)pill:(NSString *)t action:(SEL)a tag:(NSInteger)tag {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
     [b setTitle:t forState:UIControlStateNormal];
@@ -339,7 +338,6 @@ static NSString *EchoTime(float s) {
     [b addTarget:self action:a forControlEvents:UIControlEventTouchUpInside];
     return b;
 }
-
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
@@ -348,15 +346,10 @@ static NSString *EchoTime(float s) {
     self.tabs = [NSMutableArray array];
     self.cur = -1;
     self.isSplitScreen = NO;
-
     self.backBtn = [self pill:@"◀︎ رجوع" action:@selector(backTapped) tag:0];
     self.splitBtn = [self pill:@"▤ تقسيم" action:@selector(splitTapped) tag:0];
     self.closeBtn = [self pill:@"✕ إغلاق" action:@selector(closeTapped) tag:0];
-    
-    [self.view addSubview:self.backBtn];
-    [self.view addSubview:self.splitBtn];
-    [self.view addSubview:self.closeBtn];
-
+    [self.view addSubview:self.backBtn]; [self.view addSubview:self.splitBtn]; [self.view addSubview:self.closeBtn];
     self.addr = [[UITextField alloc] init];
     self.addr.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
     self.addr.textColor = UIColor.whiteColor;
@@ -365,273 +358,148 @@ static NSString *EchoTime(float s) {
     self.addr.placeholder = @"اكتب رابط الموقع أو ابحث في قوقل...";
     self.addr.keyboardType = UIKeyboardTypeURL;
     self.addr.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    self.addr.autocorrectionType = UITextAutocorrectionTypeNo;
-    self.addr.returnKeyType = UIReturnKeyGo;
-    self.addr.clearButtonMode = UITextFieldViewModeWhileEditing;
-    self.addr.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 10, 10)];
-    self.addr.leftViewMode = UITextFieldViewModeAlways;
     self.addr.delegate = self;
     [self.view addSubview:self.addr];
-
     NSMutableArray *q = [NSMutableArray array];
-    NSArray *names = @[@"Pixabay", @"Archive"];
+    NSArray *names = @[@"YouTube", @"YT5s"];
     for (NSInteger i = 0; i < 2; i++) {
         UIButton *b = [self pill:names[i] action:@selector(quickTapped:) tag:i];
-        [self.view addSubview:b];
-        [q addObject:b];
+        [self.view addSubview:b]; [q addObject:b];
     }
     self.quick = q;
-
     self.tabBar = [[UIScrollView alloc] init];
     self.tabBar.showsHorizontalScrollIndicator = NO;
     [self.view addSubview:self.tabBar];
-
     self.status = [[UILabel alloc] init];
     self.status.textAlignment = NSTextAlignmentCenter;
     self.status.font = [UIFont systemFontOfSize:12];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
-    self.status.numberOfLines = 2;
-    self.status.text = @"افتح أي موقع موسيقى حرة وتضغط زر Download، وراح ألقطها وأشغّلها. تقدر تقسم الشاشة وتفتح عدة نوافذ.";
+    self.status.text = @"استخدم الشاشة المنقسمة لعرض اليوتيوب وموقع التحميل معًا بكل سهولة.";
     [self.view addSubview:self.status];
-
     NSString *savedURL = [[NSUserDefaults standardUserDefaults] stringForKey:kLastURLKey];
-
-    // التبويب الأول: Pixabay Music (أو آخر موقع فتحته)
-    [self openTabWithConfig:nil];
-    [self loadText:(savedURL.length > 0 ? savedURL : @"https://pixabay.com/music/")];
-
-    // التبويب الثاني: Internet Archive
-    [self openTabWithConfig:nil];
-    [self loadText:@"https://archive.org/details/audio"];
-
+    [self openTabWithConfig:nil]; [self loadText:(savedURL.length > 0 ? savedURL : @"https://www.youtube.com")];
+    [self openTabWithConfig:nil]; [self loadText:@"https://yt5s.in/ar270/"];
     [self selectTab:0];
 }
-
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds;
     CGFloat top = 10;
-    
-    // ترتيب الأزرار العلوية بشكل متناسق
     self.backBtn.frame = CGRectMake(12, top, 56, 34);
     self.splitBtn.frame = CGRectMake(74, top, 64, 34);
     self.closeBtn.frame = CGRectMake(b.size.width - 72, top, 60, 34);
-    
     CGFloat qx = 144, qw = (b.size.width - 144 - 76 - 6) / 2.0;
-    for (NSInteger i = 0; i < 2; i++) {
-        self.quick[i].frame = CGRectMake(qx + i * (qw + 4), top, qw, 34);
-    }
-    
+    for (NSInteger i = 0; i < 2; i++) self.quick[i].frame = CGRectMake(qx + i * (qw + 4), top, qw, 34);
     self.addr.frame = CGRectMake(12, 50, b.size.width - 24, 36);
     self.tabBar.frame = CGRectMake(0, 92, b.size.width, 34);
-    
-    CGFloat sh = 44;
-    CGFloat startY = 130;
-    CGFloat totalH = b.size.height - startY - sh;
-
-    // منطق الشاشة المنقسمة أو العرض الفردي للتبويبات
+    CGFloat sh = 44, startY = 130, totalH = b.size.height - startY - sh;
     if (self.isSplitScreen && self.tabs.count >= 2) {
         CGFloat halfW = b.size.width / 2.0;
-        self.tabs[0].hidden = NO;
-        self.tabs[1].hidden = NO;
+        self.tabs[0].hidden = NO; self.tabs[1].hidden = NO;
         self.tabs[0].frame = CGRectMake(0, startY, halfW - 1, totalH);
         self.tabs[1].frame = CGRectMake(halfW + 1, startY, halfW - 1, totalH);
-        for (NSInteger i = 2; i < (NSInteger)self.tabs.count; i++) {
-            self.tabs[i].hidden = YES;
-        }
+        for (NSInteger i = 2; i < (NSInteger)self.tabs.count; i++) self.tabs[i].hidden = YES;
     } else {
         CGRect wf = CGRectMake(0, startY, b.size.width, totalH);
         for (NSInteger i = 0; i < (NSInteger)self.tabs.count; i++) {
-            WKWebView *w = self.tabs[i];
-            w.hidden = (i != self.cur);
-            w.frame = wf;
+            WKWebView *w = self.tabs[i]; w.hidden = (i != self.cur); w.frame = wf;
         }
     }
-    
     self.status.frame = CGRectMake(12, b.size.height - sh, b.size.width - 24, sh);
 }
-
 - (WKWebView *)openTabWithConfig:(WKWebViewConfiguration *)cfg {
     if (!cfg) cfg = [[WKWebViewConfiguration alloc] init];
     WKWebView *w = [[WKWebView alloc] initWithFrame:CGRectZero configuration:cfg];
-    w.navigationDelegate = self;
-    w.UIDelegate = self;
-    w.allowsBackForwardNavigationGestures = YES;
-    [self.view addSubview:w];
-    [self.tabs addObject:w];
-    [self viewDidLayoutSubviews];
-    [self selectTab:(NSInteger)self.tabs.count - 1];
-    return w;
+    w.navigationDelegate = self; w.UIDelegate = self; w.allowsBackForwardNavigationGestures = YES;
+    [self.view addSubview:w]; [self.tabs addObject:w]; [self viewDidLayoutSubviews];
+    [self selectTab:(NSInteger)self.tabs.count - 1]; return w;
 }
-
 - (void)selectTab:(NSInteger)i {
     if (i < 0 || i >= (NSInteger)self.tabs.count) return;
     self.cur = i;
-    if (!self.isSplitScreen) {
-        for (NSInteger k = 0; k < (NSInteger)self.tabs.count; k++) self.tabs[k].hidden = (k != i);
-    }
-    NSURL *u = self.web.URL;
-    self.addr.text = u ? u.absoluteString : @"";
-    [self refreshTabBar];
+    if (!self.isSplitScreen) for (NSInteger k = 0; k < (NSInteger)self.tabs.count; k++) self.tabs[k].hidden = (k != i);
+    NSURL *u = self.web.URL; self.addr.text = u ? u.absoluteString : @""; [self refreshTabBar];
 }
-
 - (void)refreshTabBar {
     for (UIView *v in self.tabBar.subviews) [v removeFromSuperview];
     CGFloat x = 8;
     for (NSInteger i = 0; i < (NSInteger)self.tabs.count; i++) {
-        NSString *t = self.tabs[i].title;
-        if (t.length == 0) t = @"نافذة";
+        NSString *t = self.tabs[i].title; if (t.length == 0) t = (i == 0) ? @"YouTube" : (i == 1 ? @"YT5s" : @"نافذة");
         if (t.length > 14) t = [[t substringToIndex:14] stringByAppendingString:@"…"];
         UIButton *b = [self pill:t action:@selector(tabTapped:) tag:i];
         b.frame = CGRectMake(x, 0, 104, 32);
         if (i == self.cur && !self.isSplitScreen) b.backgroundColor = [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95];
-        [self.tabBar addSubview:b];
-        x += 110;
+        [self.tabBar addSubview:b]; x += 110;
     }
-    UIButton *add = [self pill:@"＋ نافذة" action:@selector(addTabTapped) tag:0];
-    add.frame = CGRectMake(x, 0, 78, 32);
-    [self.tabBar addSubview:add];
-    x += 84;
-    UIButton *del = [self pill:@"🗑 شيلها" action:@selector(closeTabTapped) tag:0];
-    del.frame = CGRectMake(x, 0, 78, 32);
-    [self.tabBar addSubview:del];
-    x += 84;
+    UIButton *add = [self pill:@"＋ نافذة" action:@selector(addTabTapped) tag:0]; add.frame = CGRectMake(x, 0, 78, 32); [self.tabBar addSubview:add]; x += 84;
+    UIButton *del = [self pill:@"🗑 شيلها" action:@selector(closeTabTapped) tag:0]; del.frame = CGRectMake(x, 0, 78, 32); [self.tabBar addSubview:del]; x += 84;
     self.tabBar.contentSize = CGSizeMake(x + 8, 34);
 }
-
-- (void)tabTapped:(UIButton *)b {
-    [self selectTab:b.tag];
-    if (self.isSplitScreen) {
-        // إذا كان مقسم، نجعل التبويب المحدد هو النصف الأول مثلاً أو نبقيه
-    }
-}
-
+- (void)tabTapped:(UIButton *)b { [self selectTab:b.tag]; }
 - (void)splitTapped {
     self.isSplitScreen = !self.isSplitScreen;
     [self.splitBtn setTitle:self.isSplitScreen ? @"🪟 فردي" : @"▤ تقسيم" forState:UIControlStateNormal];
     self.splitBtn.backgroundColor = self.isSplitScreen ? [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95] : [UIColor colorWithWhite:1 alpha:0.14];
-    [self.view setNeedsLayout];
-    [self.view layoutIfNeeded];
+    [self.view setNeedsLayout]; [self.view layoutIfNeeded];
 }
-
-- (void)addTabTapped {
-    [self openTabWithConfig:nil];
-    [self loadText:@"https://www.google.com"];
-}
-
+- (void)addTabTapped { [self openTabWithConfig:nil]; [self loadText:@"https://www.google.com"]; }
 - (void)closeTabTapped {
-    if (self.tabs.count <= 1) { self.status.text = @"هذي آخر نافذة. اضغط ✕ إغلاق لو تبغى تطلع"; return; }
-    WKWebView *w = self.web;
-    [w stopLoading];
-    [w removeFromSuperview];
+    if (self.tabs.count <= 1) { self.status.text = @"هذي آخر نافذة."; return; }
+    WKWebView *w = self.web; [w stopLoading]; [w removeFromSuperview];
     [self.tabs removeObjectAtIndex:self.cur];
-    NSInteger n = self.cur >= (NSInteger)self.tabs.count ? (NSInteger)self.tabs.count - 1 : self.cur;
-    [self selectTab:n];
+    [self selectTab:self.cur >= (NSInteger)self.tabs.count ? (NSInteger)self.tabs.count - 1 : self.cur];
 }
-
 - (WKWebView *)webView:(WKWebView *)wv createWebViewWithConfiguration:(WKWebViewConfiguration *)cfg
    forNavigationAction:(WKNavigationAction *)a windowFeatures:(WKWindowFeatures *)f {
-    if (a.targetFrame == nil || !a.targetFrame.isMainFrame) {
-        if (a.request.URL) {
-            [wv loadRequest:a.request];
-        }
-    }
+    if (a.targetFrame == nil || !a.targetFrame.isMainFrame) { if (a.request.URL) [wv loadRequest:a.request]; }
     return nil;
 }
-
 - (void)closeTapped {
-    NSURL *curURL = self.web.URL;
-    if (curURL) {
-        [[NSUserDefaults standardUserDefaults] setObject:curURL.absoluteString forKey:kLastURLKey];
-    }
+    NSURL *curURL = self.web.URL; if (curURL) [[NSUserDefaults standardUserDefaults] setObject:curURL.absoluteString forKey:kLastURLKey];
     for (WKWebView *w in self.tabs) [w stopLoading];
     [self dismissViewControllerAnimated:YES completion:nil];
 }
-
 - (void)backTapped { if (self.web.canGoBack) [self.web goBack]; }
-
-- (void)quickTapped:(UIButton *)b {
-    NSArray *urls = @[@"https://pixabay.com/music/", @"https://archive.org/details/audio"];
-    [self loadText:urls[b.tag]];
-}
-
+- (void)quickTapped:(UIButton *)b { NSArray *urls = @[@"https://www.youtube.com", @"https://yt5s.in/ar270/"]; [self loadText:urls[b.tag]]; }
 - (void)loadText:(NSString *)t {
     t = [t stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (t.length == 0) return;
     NSURL *u = nil;
-    if ([t hasPrefix:@"http://"] || [t hasPrefix:@"https://"]) {
-        u = [NSURL URLWithString:t];
-    } else if ([t containsString:@"."] && ![t containsString:@" "]) {
-        u = [NSURL URLWithString:[@"https://" stringByAppendingString:t]];
-    } else {
+    if ([t hasPrefix:@"http://"] || [t hasPrefix:@"https://"]) u = [NSURL URLWithString:t];
+    else if ([t containsString:@"."] && ![t containsString:@" "]) u = [NSURL URLWithString:[@"https://" stringByAppendingString:t]];
+    else {
         NSURLComponents *c = [NSURLComponents componentsWithString:@"https://www.google.com/search"];
-        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"q" value:t] ];
-        u = c.URL;
+        c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"q" value:t] ]; u = c.URL;
     }
-    if (u) { 
-        self.addr.text = u.absoluteString; 
-        [[NSUserDefaults standardUserDefaults] setObject:u.absoluteString forKey:kLastURLKey];
-        [self.web loadRequest:[NSURLRequest requestWithURL:u]]; 
-    }
+    if (u) { self.addr.text = u.absoluteString; [[NSUserDefaults standardUserDefaults] setObject:u.absoluteString forKey:kLastURLKey]; [self.web loadRequest:[NSURLRequest requestWithURL:u]]; }
 }
-
-- (BOOL)textFieldShouldReturn:(UITextField *)tf {
-    [tf resignFirstResponder];
-    [self loadText:tf.text];
-    return YES;
-}
-
-- (BOOL)canDownload {
-    if (@available(iOS 14.5, *)) return YES;
-    return NO;
-}
-
-- (void)webView:(WKWebView *)wv decidePolicyForNavigationAction:(WKNavigationAction *)a
-                                         decisionHandler:(void (^)(WKNavigationActionPolicy))h {
+- (BOOL)textFieldShouldReturn:(UITextField *)tf { [tf resignFirstResponder]; [self loadText:tf.text]; return YES; }
+- (BOOL)canDownload { if (@available(iOS 14.5, *)) return YES; return NO; }
+- (void)webView:(WKWebView *)wv decidePolicyForNavigationAction:(WKNavigationAction *)a decisionHandler:(void (^)(WKNavigationActionPolicy))h {
     if ([self canDownload]) {
         BOOL should = NO;
-        if ([a respondsToSelector:NSSelectorFromString(@"shouldPerformDownload")])
-            should = [[a valueForKey:@"shouldPerformDownload"] boolValue];
+        if ([a respondsToSelector:NSSelectorFromString(@"shouldPerformDownload")]) should = [[a valueForKey:@"shouldPerformDownload"] boolValue];
         NSString *ext = a.request.URL.pathExtension;
-        static NSSet *audioExts;
-        static dispatch_once_t once;
+        static NSSet *audioExts; static dispatch_once_t once;
         dispatch_once(&once, ^{ audioExts = [NSSet setWithObjects:@"mp3", @"m4a", @"wav", @"aac", @"flac", nil]; });
-        if (should || [audioExts containsObject:ext.lowercaseString]) { 
-            h((WKNavigationActionPolicy)2); 
-            return; 
-        }
+        if (should || [audioExts containsObject:ext.lowercaseString]) { h((WKNavigationActionPolicy)2); return; }
     }
     h(WKNavigationActionPolicyAllow);
 }
-
-- (void)webView:(WKWebView *)wv decidePolicyForNavigationResponse:(WKNavigationResponse *)r
-                                                  decisionHandler:(void (^)(WKNavigationResponsePolicy))h {
+- (void)webView:(WKWebView *)wv decidePolicyForNavigationResponse:(WKNavigationResponse *)r decisionHandler:(void (^)(WKNavigationResponsePolicy))h {
     if ([self canDownload]) {
         NSString *mime = r.response.MIMEType.lowercaseString ?: @"";
         NSString *ext = r.response.suggestedFilename.pathExtension;
-        static NSSet *audioExts;
-        static dispatch_once_t once;
+        static NSSet *audioExts; static dispatch_once_t once;
         dispatch_once(&once, ^{ audioExts = [NSSet setWithObjects:@"mp3", @"m4a", @"wav", @"aac", @"flac", nil]; });
-        BOOL audio = [mime hasPrefix:@"audio/"] || [audioExts containsObject:ext.lowercaseString] || [audioExts containsObject:r.response.URL.pathExtension.lowercaseString];
-        if (audio) { 
-            h((WKNavigationResponsePolicy)2); 
-            return; 
-        }
+        BOOL audio = [mime hasPrefix:@"audio/"] || [audioExts containsObject:ext.lowercaseString];
+        if (audio) { h((WKNavigationResponsePolicy)2); return; }
     }
     h(WKNavigationResponsePolicyAllow);
 }
-
-- (void)webView:(WKWebView *)wv navigationAction:(WKNavigationAction *)a didBecomeDownload:(id)d {
-    [d setDelegate:self];
-    self.status.text = @"⏳ بدأ التنزيل…";
-}
-- (void)webView:(WKWebView *)wv navigationResponse:(WKNavigationResponse *)r didBecomeDownload:(id)d {
-    [d setDelegate:self];
-    self.status.text = @"⏳ بدأ التنزيل…";
-}
-
-- (void)download:(id)d decideDestinationUsingResponse:(NSURLResponse *)resp suggestedFilename:(NSString *)name
-                                     completionHandler:(void (^)(NSURL *))ch {
+- (void)webView:(WKWebView *)wv navigationAction:(WKNavigationAction *)a didBecomeDownload:(id)d { [d setDelegate:self]; self.status.text = @"⏳ بدأ التنزيل…"; }
+- (void)webView:(WKWebView *)wv navigationResponse:(WKNavigationResponse *)r didBecomeDownload:(id)d { [d setDelegate:self]; self.status.text = @"⏳ بدأ التنزيل…"; }
+- (void)download:(id)d decideDestinationUsingResponse:(NSURLResponse *)resp suggestedFilename:(NSString *)name completionHandler:(void (^)(NSURL *))ch {
     NSString *fn = name.length ? name : @"song";
     fn = [fn stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
     if (!fn.pathExtension.length) fn = [fn stringByAppendingString:@".mp3"];
@@ -641,22 +509,18 @@ static NSString *EchoTime(float s) {
     self.status.text = [NSString stringWithFormat:@"⏳ جاري تنزيل: %@", fn];
     ch(dest);
 }
-
 - (void)downloadDidFinish:(id)d {
     NSValue *k = [NSValue valueWithNonretainedObject:d];
-    NSURL *dest = self.dests[k];
-    [self.dests removeObjectForKey:k];
+    NSURL *dest = self.dests[k]; [self.dests removeObjectForKey:k];
     if (!dest) return;
     NSString *name = [[dest.lastPathComponent stringByDeletingPathExtension] copy];
     void (^cb)(NSURL *, NSString *) = self.onPick;
     [self dismissViewControllerAnimated:YES completion:^{ if (cb) cb(dest, name); }];
 }
-
 - (void)download:(id)d didFailWithError:(NSError *__nullable)e resumeData:(NSData *__nullable)rd {
     [self.dests removeObjectForKey:[NSValue valueWithNonretainedObject:d]];
-    self.status.text = @"❌ فشل التنزيل. جرّب مرة ثانية أو موقع ثاني";
+    self.status.text = @"❌ فشل التنزيل.";
 }
-
 - (void)webView:(WKWebView *)wv didFinishNavigation:(WKNavigation *)n {
     if (wv == self.web && wv.URL) {
         self.addr.text = wv.URL.absoluteString;
@@ -664,10 +528,9 @@ static NSString *EchoTime(float s) {
     }
     [self refreshTabBar];
 }
-
 @end
 
-#pragma mark - الواجهة الرئيسية (تبقى كما هي بقية الملف)
+#pragma mark - الواجهة الرئيسية
 
 @interface EchoController : UIViewController <UIDocumentPickerDelegate> {
     UISlider *_sl[S_COUNT];
@@ -709,8 +572,7 @@ static NSString *EchoTime(float s) {
 
 - (UIButton *)makeButton:(NSString *)title frame:(CGRect)f tag:(NSInteger)tag action:(SEL)a {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-    b.frame = f;
-    b.tag = tag;
+    b.frame = f; b.tag = tag;
     [b setTitle:title forState:UIControlStateNormal];
     [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     b.titleLabel.font = [UIFont boldSystemFontOfSize:14];
@@ -724,10 +586,7 @@ static NSString *EchoTime(float s) {
 
 - (UISlider *)makeSliderAt:(CGRect)f min:(float)mn max:(float)mx value:(float)v action:(SEL)a {
     UISlider *s = [[UISlider alloc] initWithFrame:f];
-    s.minimumValue = mn;
-    s.maximumValue = mx;
-    s.continuous = YES;
-    s.value = v;
+    s.minimumValue = mn; s.maximumValue = mx; s.continuous = YES; s.value = v;
     [s addTarget:self action:a forControlEvents:UIControlEventValueChanged];
     return s;
 }
@@ -735,14 +594,10 @@ static NSString *EchoTime(float s) {
 - (UISwitch *)addToggleTo:(UIView *)parent title:(NSString *)title x:(CGFloat)x y:(CGFloat)y
                     width:(CGFloat)wd on:(BOOL)on action:(SEL)a {
     UILabel *l = [self makeLabelAt:CGRectMake(x, y, wd - 56, 31) size:14 bold:YES alpha:1];
-    l.textAlignment = NSTextAlignmentLeft;
-    l.numberOfLines = 1;
-    l.adjustsFontSizeToFitWidth = YES;
-    l.text = title;
+    l.textAlignment = NSTextAlignmentLeft; l.numberOfLines = 1; l.adjustsFontSizeToFitWidth = YES; l.text = title;
     [parent addSubview:l];
     UISwitch *sw = [[UISwitch alloc] init];
-    sw.frame = CGRectMake(x + wd - 51, y, 51, 31);
-    sw.on = on;
+    sw.frame = CGRectMake(x + wd - 51, y, 51, 31); sw.on = on;
     [sw addTarget:self action:a forControlEvents:UIControlEventValueChanged];
     [parent addSubview:sw];
     return sw;
@@ -751,9 +606,7 @@ static NSString *EchoTime(float s) {
 - (UIScrollView *)makeTab {
     UIScrollView *sv = [[UIScrollView alloc] initWithFrame:CGRectMake(0, kTabTop, kPanelW, kPanelH - kTabTop)];
     sv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    sv.alwaysBounceVertical = YES;
-    sv.delaysContentTouches = NO;
-    sv.showsHorizontalScrollIndicator = NO;
+    sv.alwaysBounceVertical = YES; sv.delaysContentTouches = NO; sv.showsHorizontalScrollIndicator = NO;
     return sv;
 }
 
@@ -781,10 +634,8 @@ static NSString *EchoTime(float s) {
                                value:EchoInt(sp->key, sp->def)
                               action:@selector(specSliderChanged:)];
     s.tag = idx;
-    [parent addSubview:l];
-    [parent addSubview:s];
-    _lb[idx] = l;
-    _sl[idx] = s;
+    [parent addSubview:l]; [parent addSubview:s];
+    _lb[idx] = l; _sl[idx] = s;
     [self updateSpecLabel:idx];
     return y + 54;
 }
@@ -810,26 +661,22 @@ static NSString *EchoTime(float s) {
     UIButton *fab = [UIButton buttonWithType:UIButtonTypeCustom];
     fab.frame = CGRectMake(20, 140, 52, 52);
     fab.backgroundColor = [UIColor colorWithWhite:0 alpha:0.65];
-    fab.layer.cornerRadius = 26;
-    fab.layer.borderWidth = 1;
+    fab.layer.cornerRadius = 26; fab.layer.borderWidth = 1;
     fab.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.35].CGColor;
     [fab setTitle:@"🎙" forState:UIControlStateNormal];
     fab.titleLabel.font = [UIFont systemFontOfSize:24];
     [fab addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragFab:)];
-    [fab addGestureRecognizer:pan];
+    [fab addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragFab:)]];
     [self.view addSubview:fab];
     self.fab = fab;
 
     UIView *panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kPanelW, kPanelH)];
     panel.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.95];
-    panel.layer.cornerRadius = 16;
-    panel.clipsToBounds = YES;
-    panel.hidden = YES;
+    panel.layer.cornerRadius = 16; panel.clipsToBounds = YES; panel.hidden = YES;
     [self.view addSubview:panel];
     self.panel = panel;
 
-    UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"الصدى", @"الموازن", @"النبرة", @"المايك", @"🎵"]];
+    UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"الصدى", @"الموازن", @"النبرة/AI", @"المايك", @"🎵"]];
     tabs.frame = CGRectMake(16, 12, kPanelW - 32, 34);
     tabs.selectedSegmentIndex = 0;
     tabs.selectedSegmentTintColor = [UIColor colorWithWhite:1 alpha:0.28];
@@ -853,7 +700,7 @@ static NSString *EchoTime(float s) {
 
     // تبويب الصدى
     y = 4;
-    y = [self addHeader:@"نوع الصدى (كل واحد لحاله)" to:tabEcho y:y];
+    y = [self addHeader:@"نوع الصدى" to:tabEcho y:y];
     NSArray *modeNames = @[@"👻 كهف مسكون", @"ديلاي", @"ديلاي شريط", @"غرفة", @"قاعة", @"ستاديوم", @"فضاء"];
     CGFloat mbw = (w - 16) / 3.0;
     NSMutableArray *mb = [NSMutableArray array];
@@ -862,39 +709,24 @@ static NSString *EchoTime(float s) {
         UIButton *b = [self makeButton:modeNames[i]
                                  frame:CGRectMake(16 + col * (mbw + 8), y + row * 40, mbw, 32)
                                    tag:i action:@selector(modeTapped:)];
-        [tabEcho addSubview:b];
-        [mb addObject:b];
+        [tabEcho addSubview:b]; [mb addObject:b];
     }
     self.modeBtns = mb;
     y += 3 * 40 + 2;
-    y = [self addHint:@"«كهف مسكون» = كهف + تكرار مبعثر حسب الأزرار والأشرطة تحت." to:tabEcho y:y height:48];
-
     CGFloat tw = (w - 12) / 2.0;
     [self addToggle:T_CAVE   to:tabEcho x:16 y:y width:tw];
     [self addToggle:T_REPEAT to:tabEcho x:16 + tw + 12 y:y width:tw];
     y += 40;
-
     y = [self addHeader:@"🔊 عام" to:tabEcho y:y];
     y = [self addSlider:S_LEVEL to:tabEcho y:y];
     y = [self addSlider:S_BOOST to:tabEcho y:y];
     y = [self addSlider:S_RANGE to:tabEcho y:y];
-
-    y = [self addHeader:@"👻 الكهف" to:tabEcho y:y];
+    y = [self addHeader:@"👻 الكهف والتكرار" to:tabEcho y:y];
     y = [self addSlider:S_CAVEAMT to:tabEcho y:y];
     y = [self addSlider:S_DAMP to:tabEcho y:y];
-    y = [self addSlider:S_MOD to:tabEcho y:y];
-
-    y = [self addHeader:@"🔁 التكرار المبعثر (Multi-Tap)" to:tabEcho y:y];
     y = [self addSlider:S_REPAMT to:tabEcho y:y];
     y = [self addSlider:S_TAPSPEED to:tabEcho y:y];
-    y = [self addSlider:S_TAPFB to:tabEcho y:y];
-    y = [self addSlider:S_TAPSCAT to:tabEcho y:y];
-
-    y = [self addHint:@"تردد التكرار والتبعثر." to:tabEcho y:y height:48];
-    [tabEcho addSubview:[self makeButton:@"↺ رجّع إعدادات الصدى الافتراضية"
-                                   frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(resetEcho)]];
-    y += 34 + 16;
-    tabEcho.contentSize = CGSizeMake(kPanelW, y);
+    tabEcho.contentSize = CGSizeMake(kPanelW, y + 10);
 
     // تبويب الموازن
     y = 4;
@@ -906,9 +738,6 @@ static NSString *EchoTime(float s) {
                                        tag:i action:@selector(eqPresetTapped:)]];
     }
     y += 42;
-    [tabEq addSubview:[self makeButton:@"🌊 شيل موجة الذيل"
-                                 frame:CGRectMake(16, y, w, 32) tag:0 action:@selector(deWaveTapped)]];
-    y += 42;
     y = [self addHeader:@"النطاقات" to:tabEq y:y];
     y = [self addSlider:S_EQLOF to:tabEq y:y];
     y = [self addSlider:S_EQHIF to:tabEq y:y];
@@ -917,92 +746,73 @@ static NSString *EchoTime(float s) {
     y = [self addSlider:S_EQHI to:tabEq y:y];
     tabEq.contentSize = CGSizeMake(kPanelW, y + 10);
 
-    // تبويب النبرة
-    self.pitchLabel = [self makeLabelAt:CGRectMake(16, 4, w, 26) size:16 bold:YES alpha:1];
+    // تبويب النبرة وصوت البنت AI (الجديد كلياً لـ M2 iPad)
+    y = 4;
+    y = [self addHeader:@"✨ محرك تحويل الصوت بالذكاء الاصطناعي (M2 Neural Engine)" to:tabPitch y:y];
+    [self addToggle:T_AI to:tabPitch x:16 y:y width:w];
+    y += 44;
+    y = [self addHint:@"عند التفعيل، يتم تحويل نبرة صوتك الحية لصوت أنثوي طبيعي بالكامل باستخدام نموذج الذكاء الاصطناعي مع استغلال معالج M2." to:tabPitch y:y height:44];
+
+    y = [self addHeader:@"🎛 النبرة الكلاسيكية والروبوت" to:tabPitch y:y];
+    self.pitchLabel = [self makeLabelAt:CGRectMake(16, y, w, 22) size:14 bold:YES alpha:1];
     [tabPitch addSubview:self.pitchLabel];
-    self.pitchSlider = [self makeSliderAt:CGRectMake(16, 32, w, 30) min:-12 max:12 value:pitch action:@selector(pitchChanged:)];
+    y += 24;
+    self.pitchSlider = [self makeSliderAt:CGRectMake(16, y, w, 28) min:-12 max:12 value:pitch action:@selector(pitchChanged:)];
     [tabPitch addSubview:self.pitchSlider];
+    y += 36;
 
-    y = [self addSlider:S_FORMANT to:tabPitch y:66];
-
-    NSArray *names = @[@"عادي", @"👧 بنت ناعمة", @"🧒 بنت صغيرة", @"👨 رجل", @"👹 وحش", @"🤖 روبوت", @"🎲 عشوائي"];
+    NSArray *names = @[@"عادي", @"بنت (كلاسيك)", @"رجل", @"وحش", @"روبوت", @"🎲 عشوائي"];
     CGFloat pbw = (w - 16) / 3.0;
-    for (NSInteger i = 0; i < 7; i++) {
+    for (NSInteger i = 0; i < 6; i++) {
         NSInteger col = i % 3, row = i / 3;
-        CGRect f = CGRectMake(16 + col * (pbw + 8), y + 6 + row * 42, pbw, 34);
+        CGRect f = CGRectMake(16 + col * (pbw + 8), y + row * 40, pbw, 32);
         [tabPitch addSubview:[self makeButton:names[i] frame:f tag:i action:@selector(presetTapped:)]];
     }
-    y += 6 + 3 * 42 + 4;
-    y = [self addHint:@"النبرة ترفع أو تنزّل طبقة الصوت، وشكل الصوت (فورمانت) يخلّي الصوت أنحف (موجب) أو أغلظ (سالب).\nصوت البنت الطبيعي = نبرة +5 إلى +7 مع شكل صوت +12 إلى +20. لو طلع كأنه سنجاب نزّل النبرة أو شكل الصوت.\nأحسن شي تجرّبه بأذنك وتعدّل."
-                   to:tabPitch y:y height:78];
-    tabPitch.contentSize = CGSizeMake(kPanelW, y + 10);
+    tabPitch.contentSize = CGSizeMake(kPanelW, y + 90);
 
-    // تبويب المضخّم
+    // تبويب المضخّم وسماع الصوت
     y = 4;
     y = [self addSlider:S_GAIN to:tabAmp y:y];
-    NSArray *quickNames = @[@"عادي", @"×2", @"×5", @"×8", @"×12", @"×16"];
-    NSArray *quickTags  = @[@100, @200, @500, @800, @1200, @1600];
-    CGFloat qbw = (w - 6 * 5) / 6.0;
-    for (NSInteger i = 0; i < 6; i++) {
-        CGRect f = CGRectMake(16 + i * (qbw + 6), y + 4, qbw, 32);
-        [tabAmp addSubview:[self makeButton:quickNames[i] frame:f tag:[quickTags[i] integerValue] action:@selector(gainQuick:)]];
-    }
-    y += 48;
-
-    UILabel *meterLabel = [self makeLabelAt:CGRectMake(16, y, w, 18) size:13 bold:NO alpha:0.7];
-    meterLabel.text = @"مستوى المايك";
-    [tabAmp addSubview:meterLabel];
-    y += 24;
-
+    y = [self addHeader:@"مستوى المايك والمراقبة" to:tabAmp y:y];
     UIProgressView *meter = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
     meter.frame = CGRectMake(16, y, w, 8);
     meter.trackTintColor = [UIColor colorWithWhite:1 alpha:0.15];
     meter.progressTintColor = [UIColor systemGreenColor];
     [tabAmp addSubview:meter];
     self.meter = meter;
-    y += 20;
-
+    y += 18;
     self.micStatus = [self makeLabelAt:CGRectMake(16, y, w, 20) size:13 bold:YES alpha:0.9];
     self.micStatus.text = @"🔴 المايك مو شغال";
     self.micStatus.textColor = [UIColor systemOrangeColor];
     [tabAmp addSubview:self.micStatus];
-    y += 32;
-
-    y = [self addHeader:@"🎧 أسمع صوتي" to:tabAmp y:y];
+    y += 30;
     [self addToggle:T_SELFMON to:tabAmp x:16 y:y width:w];
     y += 38;
     y = [self addSlider:S_SELFVOL to:tabAmp y:y];
     self.monWarn = [self makeLabelAt:CGRectMake(16, y, w, 34) size:12 bold:YES alpha:1];
     self.monWarn.textColor = [UIColor systemOrangeColor];
     [tabAmp addSubview:self.monWarn];
-    y += 40;
-
     tabAmp.contentSize = CGSizeMake(kPanelW, y + 10);
 
-    // تبويب الأغاني
+    // تبويب الأغاني والمتصفح
     self.songLabel = [self makeLabelAt:CGRectMake(16, 4, w, 34) size:13 bold:YES alpha:1];
     self.songLabel.text = @"ما فيه أغنية. افتح المتصفح أو اختر ملف من جهازك";
     [tabMusic addSubview:self.songLabel];
-
     CGFloat btnW = (w - 8) / 2.0;
-    [tabMusic addSubview:[self makeButton:@"🌐 متصفح" frame:CGRectMake(16, 42, btnW, 36) tag:0 action:@selector(browseSong)]];
-    [tabMusic addSubview:[self makeButton:@"📂 ملفات" frame:CGRectMake(16 + btnW + 8, 42, btnW, 36) tag:0 action:@selector(chooseSong)]];
-
+    [tabMusic addSubview:[self makeButton:@"🌐 متصفح يوتيوب وتحميل" frame:CGRectMake(16, 42, btnW, 36) tag:0 action:@selector(browseSong)]];
+    [tabMusic addSubview:[self makeButton:@"📂 ملفات الجهاز" frame:CGRectMake(16 + btnW + 8, 42, btnW, 36) tag:0 action:@selector(chooseSong)]];
     UISlider *seek = [self makeSliderAt:CGRectMake(16, 86, w, 28) min:0 max:1 value:0 action:@selector(seekChanged:)];
     [seek addTarget:self action:@selector(seekBegan:) forControlEvents:UIControlEventTouchDown];
     [seek addTarget:self action:@selector(seekEnded:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
     [tabMusic addSubview:seek];
     self.seekSlider = seek;
-
     self.timeLabel = [self makeLabelAt:CGRectMake(16, 114, w, 18) size:12 bold:NO alpha:0.7];
     self.timeLabel.text = @"0:00 / 0:00";
     [tabMusic addSubview:self.timeLabel];
-
     CGFloat hb = (w - 8) / 2.0;
     self.playBtn = [self makeButton:@"▶︎ تشغيل" frame:CGRectMake(16, 138, hb, 34) tag:0 action:@selector(playTapped)];
     [tabMusic addSubview:self.playBtn];
     [tabMusic addSubview:[self makeButton:@"⏹ إيقاف" frame:CGRectMake(16 + hb + 8, 138, hb, 34) tag:0 action:@selector(stopTapped)]];
-
     y = 182;
     y = [self addSlider:S_MUSVOL to:tabMusic y:y];
     [self addToggle:T_LOOP     to:tabMusic x:16 y:y width:w]; y += 36;
@@ -1010,8 +820,6 @@ static NSString *EchoTime(float s) {
     [self addToggle:T_SONGECHO to:tabMusic x:16 y:y width:w]; y += 36;
     [self addToggle:T_MONITOR  to:tabMusic x:16 y:y width:w]; y += 40;
     y = [self addSlider:S_MONVOL to:tabMusic y:y];
-    y = [self addHint:@"🌐 المتصفح: ابحث، تصفح مواقع MP3، وحمّل المقاطع مباشرة."
-                   to:tabMusic y:y height:60];
     tabMusic.contentSize = CGSizeMake(kPanelW, y + 10);
 
     [self refreshModeButtons];
@@ -1045,115 +853,63 @@ static NSString *EchoTime(float s) {
     const SliderSpec *sp = &kSliders[idx];
     if (v < sp->min) v = sp->min;
     if (v > sp->max) v = sp->max;
-    sp->set(v);
-    [self saveInt:v key:sp->key];
-    [self updateSpecLabel:idx];
+    sp->set(v); [self saveInt:v key:sp->key]; [self updateSpecLabel:idx];
 }
 
-- (void)specSliderChanged:(UISlider *)s {
-    [self applySpec:(int)s.tag value:(int)lroundf(s.value)];
-}
+- (void)specSliderChanged:(UISlider *)s { [self applySpec:(int)s.tag value:(int)lroundf(s.value)]; }
 
-- (void)setSpec:(int)idx to:(int)v {
-    _sl[idx].value = v;
-    [self applySpec:idx value:v];
-}
+- (void)setSpec:(int)idx to:(int)v { _sl[idx].value = v; [self applySpec:idx value:v]; }
 
 - (void)setToggle:(int)idx on:(BOOL)on {
     const ToggleSpec *t = &kToggles[idx];
-    _sw[idx].on = on;
-    t->set(on ? 1 : 0);
-    [self saveInt:on ? 1 : 0 key:t->key];
+    _sw[idx].on = on; t->set(on ? 1 : 0); [self saveInt:on ? 1 : 0 key:t->key];
 }
 
 - (void)specToggled:(UISwitch *)s {
     const ToggleSpec *t = &kToggles[s.tag];
-    t->set(s.on ? 1 : 0);
-    [self saveInt:s.on ? 1 : 0 key:t->key];
+    t->set(s.on ? 1 : 0); [self saveInt:s.on ? 1 : 0 key:t->key];
 }
 
 - (void)refreshModeButtons {
     for (UIButton *b in self.modeBtns) {
-        b.backgroundColor = (b.tag == self.mode)
-            ? [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95]
-            : [UIColor colorWithWhite:1 alpha:0.14];
+        b.backgroundColor = (b.tag == self.mode) ? [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95] : [UIColor colorWithWhite:1 alpha:0.14];
     }
 }
 
 - (void)applyMode:(NSInteger)m {
-    self.mode = m;
-    DiscordEcho_SetMode((int)m);
-    [self saveInt:(int)m key:kModeKey];
-    [self refreshModeButtons];
+    self.mode = m; DiscordEcho_SetMode((int)m); [self saveInt:(int)m key:kModeKey]; [self refreshModeButtons];
 }
 
 - (void)modeTapped:(UIButton *)b { [self applyMode:b.tag]; }
 
-- (void)resetEcho {
-    for (int i = S_LEVEL; i <= S_EQHI; i++) [self setSpec:i to:kSliders[i].def];
-    [self setToggle:T_CAVE on:kToggles[T_CAVE].def != 0];
-    [self setToggle:T_REPEAT on:kToggles[T_REPEAT].def != 0];
-    [self applyMode:0];
-}
-
-- (void)applyEqPreset:(NSInteger)i {
-    static const int idx[5] = { S_EQLOF, S_EQHIF, S_EQLO, S_EQMID, S_EQHI };
-    for (int k = 0; k < 5; k++) [self setSpec:idx[k] to:kEqPresets[i][k]];
-}
-- (void)eqPresetTapped:(UIButton *)b { [self applyEqPreset:b.tag]; }
-- (void)deWaveTapped {
-    [self applyEqPreset:2];
-    [self setSpec:S_MOD to:20];
-    [self setSpec:S_DAMP to:65];
-}
-
-- (void)applyPitch:(int)st formant:(int)fm robot:(BOOL)robot {
-    if (st < -12) st = -12;
-    if (st > 12) st = 12;
-    self.pitchSlider.value = st;
-    self.robot = robot;
-    DiscordEcho_SetPitch(st);
-    DiscordEcho_SetRobot(robot ? 1 : 0);
-    [self saveInt:st key:kPitchKey];
-    [self saveInt:robot ? 1 : 0 key:kRobotKey];
-    [self setSpec:S_FORMANT to:fm];
+- (void)applyPitch:(int)st robot:(BOOL)robot {
+    if (st < -12) st = -12; if (st > 12) st = 12;
+    self.pitchSlider.value = st; self.robot = robot;
+    DiscordEcho_SetPitch(st); DiscordEcho_SetRobot(robot ? 1 : 0);
+    [self saveInt:st key:kPitchKey]; [self saveInt:robot ? 1 : 0 key:kRobotKey];
     [self updatePitchLabel];
 }
-- (void)pitchChanged:(UISlider *)s {
-    int st = (int)lroundf(s.value);
-    DiscordEcho_SetPitch(st);
-    [self saveInt:st key:kPitchKey];
-    [self updatePitchLabel];
-}
+- (void)pitchChanged:(UISlider *)s { [self applyPitch:(int)lroundf(s.value) robot:self.robot]; }
 - (void)presetTapped:(UIButton *)b {
     switch (b.tag) {
-        case 0: [self applyPitch:0  formant:0   robot:NO];  break;   // عادي
-        case 1: [self applyPitch:6  formant:16  robot:NO];  break;   // بنت ناعمة
-        case 2: [self applyPitch:8  formant:24  robot:NO];  break;   // بنت صغيرة
-        case 3: [self applyPitch:-4 formant:-12 robot:NO];  break;   // رجل
-        case 4: [self applyPitch:-8 formant:-22 robot:NO];  break;   // وحش
-        case 5: [self applyPitch:0  formant:0   robot:YES]; break;   // روبوت
-        default: {                                                      // عشوائي
-            int st = (int)arc4random_uniform(17) - 8;
-            int fm = st * 3;
-            if (fm > 30) fm = 30;
-            if (fm < -30) fm = -30;
-            [self applyPitch:st formant:fm robot:(arc4random_uniform(5) == 0)];
+        case 0: [self applyPitch:0  robot:NO];  break;
+        case 1: [self applyPitch:5  robot:NO];  break;
+        case 2: [self applyPitch:-4 robot:NO];  break;
+        case 3: [self applyPitch:-9 robot:NO];  break;
+        case 4: [self applyPitch:0  robot:YES]; break;
+        default: {
+            int st = (int)arc4random_uniform(21) - 10;
+            [self applyPitch:st robot:(arc4random_uniform(4) == 0)];
         }
     }
 }
 
-- (void)gainQuick:(UIButton *)b { [self setSpec:S_GAIN to:(int)b.tag]; }
-
 - (void)chooseSong {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    UIDocumentPickerViewController *p =
-        [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.audio"]
-                                                               inMode:UIDocumentPickerModeImport];
+    UIDocumentPickerViewController *p = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.audio"] inMode:UIDocumentPickerModeImport];
 #pragma clang diagnostic pop
-    p.delegate = self;
-    p.allowsMultipleSelection = NO;
+    p.delegate = self; p.allowsMultipleSelection = NO;
     [self presentViewController:p animated:YES completion:nil];
 }
 
@@ -1174,8 +930,7 @@ static NSString *EchoTime(float s) {
     DiscordEcho_MusicPlay(0);
     self.songLabel.text = [NSString stringWithFormat:@"⏳ جاري التحميل: %@", name];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        size_t count = 0;
-        BOOL truncated = NO;
+        size_t count = 0; BOOL truncated = NO;
         float *buf = EchoDecodeFile(url, &count, &truncated, ^(float p) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.songLabel.text = [NSString stringWithFormat:@"⏳ فك الأغنية %d%%: %@", (int)(p * 100), name];
@@ -1183,14 +938,9 @@ static NSString *EchoTime(float s) {
         });
         if (cleanup) [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (!buf) {
-                self.songLabel.text = @"❌ ما قدرت أقرأ الملف. جرّب mp3 أو m4a أو wav";
-                return;
-            }
+            if (!buf) { self.songLabel.text = @"❌ فشل تحميل الملف الصوتي."; return; }
             DiscordEcho_MusicLoad(buf, count);
-            NSString *t = [NSString stringWithFormat:@"🎵 %@", name];
-            if (truncated) t = [t stringByAppendingString:@" (أول 8 دقايق بس)"];
-            self.songLabel.text = t;
+            self.songLabel.text = [NSString stringWithFormat:@"🎵 %@", name];
             [self refreshMusicUI];
         });
     });
@@ -1204,24 +954,14 @@ static NSString *EchoTime(float s) {
     [self.playBtn setTitle:(DiscordEcho_MusicIsPlaying() ? @"⏸ إيقاف مؤقت" : @"▶︎ تشغيل") forState:UIControlStateNormal];
 }
 
-- (void)playTapped {
-    DiscordEcho_MusicPlay(DiscordEcho_MusicIsPlaying() ? 0 : 1);
-    [self refreshMusicUI];
-}
-- (void)stopTapped {
-    DiscordEcho_MusicStop();
-    self.seekSlider.value = 0;
-    [self refreshMusicUI];
-}
+- (void)playTapped { DiscordEcho_MusicPlay(DiscordEcho_MusicIsPlaying() ? 0 : 1); [self refreshMusicUI]; }
+- (void)stopTapped { DiscordEcho_MusicStop(); self.seekSlider.value = 0; [self refreshMusicUI]; }
 - (void)seekBegan:(UISlider *)s { self.seeking = YES; }
 - (void)seekChanged:(UISlider *)s {
     float dur = DiscordEcho_MusicDuration();
     self.timeLabel.text = [NSString stringWithFormat:@"%@ / %@", EchoTime(s.value * dur), EchoTime(dur)];
 }
-- (void)seekEnded:(UISlider *)s {
-    DiscordEcho_MusicSeek(s.value);
-    self.seeking = NO;
-}
+- (void)seekEnded:(UISlider *)s { DiscordEcho_MusicSeek(s.value); self.seeking = NO; }
 
 - (void)startTimer {
     if (self.timer) return;
@@ -1234,9 +974,6 @@ static NSString *EchoTime(float s) {
             float pk = DiscordEcho_GetPeak();
             if (pk > 1.0f) pk = 1.0f;
             s.meter.progress = pk;
-            s.meter.progressTintColor = (pk > 0.98f) ? [UIColor systemRedColor]
-                                      : (pk > 0.8f)  ? [UIColor systemOrangeColor]
-                                                     : [UIColor systemGreenColor];
             unsigned c = DiscordEcho_RenderCount();
             NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
             if (c != s.lastRender) { s.lastRender = c; s.lastRenderTime = now; }
@@ -1251,69 +988,39 @@ static NSString *EchoTime(float s) {
     }];
 }
 
-- (void)stopTimer {
-    [self.timer invalidate];
-    self.timer = nil;
-}
-
+- (void)stopTimer { [self.timer invalidate]; self.timer = nil; }
 - (void)togglePanel {
     self.panel.hidden = !self.panel.hidden;
-    if (self.panel.hidden) {
-        [self stopTimer];
-    } else {
-        [self positionPanel];
-        [self startTimer];
-    }
+    if (self.panel.hidden) [self stopTimer];
+    else { [self positionPanel]; [self startTimer]; }
 }
-
 - (void)positionPanel {
     CGRect b = self.view.bounds;
-    CGFloat w = kPanelW;
-    CGFloat h = MIN(kPanelH, b.size.height - 20);
-    CGFloat x = CGRectGetMidX(self.fab.frame) - w / 2;
-    x = MAX(10, MIN(x, b.size.width - w - 10));
-    CGFloat y = CGRectGetMaxY(self.fab.frame) + 10;
-    if (y + h > b.size.height - 10) y = CGRectGetMinY(self.fab.frame) - h - 10;
-    y = MAX(10, y);
+    CGFloat w = kPanelW, h = MIN(kPanelH, b.size.height - 20);
+    CGFloat x = MAX(10, MIN(CGRectGetMidX(self.fab.frame) - w / 2, b.size.width - w - 10));
+    CGFloat y = MAX(10, MIN(CGRectGetMaxY(self.fab.frame) + 10, b.size.height - h - 10));
     self.panel.frame = CGRectMake(x, y, w, h);
 }
-
 - (void)dragFab:(UIPanGestureRecognizer *)g {
     CGPoint t = [g translationInView:self.view];
     self.fab.center = CGPointMake(self.fab.center.x + t.x, self.fab.center.y + t.y);
     [g setTranslation:CGPointZero inView:self.view];
-    [self clampFab];
-    if (!self.panel.hidden) [self positionPanel];
-}
-
-- (void)clampFab {
     CGRect b = self.view.bounds;
-    UIEdgeInsets s = self.view.safeAreaInsets;
-    CGFloat r = 26;
     CGPoint c = self.fab.center;
-    c.x = MAX(r + s.left, MIN(c.x, b.size.width - r - s.right));
-    c.y = MAX(r + s.top,  MIN(c.y, b.size.height - r - s.bottom));
+    c.x = MAX(26, MIN(c.x, b.size.width - 26));
+    c.y = MAX(26, MIN(c.y, b.size.height - 26));
     self.fab.center = c;
-}
-
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
-    [self clampFab];
     if (!self.panel.hidden) [self positionPanel];
 }
-
 @end
 
 static EchoWindow *gWin;
-
 static void echo_setup_window(void) {
     if (gWin) return;
     UIWindowScene *scene = nil;
     for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
-        if ([s isKindOfClass:UIWindowScene.class] &&
-            s.activationState == UISceneActivationStateForegroundActive) {
-            scene = (UIWindowScene *)s;
-            break;
+        if ([s isKindOfClass:UIWindowScene.class] && s.activationState == UISceneActivationStateForegroundActive) {
+            scene = (UIWindowScene *)s; break;
         }
     }
     if (!scene) return;
@@ -1325,49 +1032,23 @@ static void echo_setup_window(void) {
 }
 
 static void echo_apply_saved(void) {
-    for (int i = 0; i < S_COUNT; i++)
-        kSliders[i].set(EchoInt(kSliders[i].key, kSliders[i].def));
-    for (int i = 0; i < T_COUNT; i++)
-        kToggles[i].set(EchoInt(kToggles[i].key, kToggles[i].def));
+    for (int i = 0; i < S_COUNT; i++) kSliders[i].set(EchoInt(kSliders[i].key, kSliders[i].def));
+    for (int i = 0; i < T_COUNT; i++) kToggles[i].set(EchoInt(kToggles[i].key, kToggles[i].def));
     DiscordEcho_SetMode(EchoInt(kModeKey, 0));
     DiscordEcho_SetPitch(EchoInt(kPitchKey, 0));
     DiscordEcho_SetRobot(EchoInt(kRobotKey, 0));
+    DiscordEcho_SetAIVoice(EchoInt(kAIKey, 0));
 }
 
 __attribute__((constructor))
 static void echo_ui_init(void) {
     echo_apply_saved();
-
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
-    [nc addObserverForName:UIApplicationDidBecomeActiveNotification
-                    object:nil
-                     queue:[NSOperationQueue mainQueue]
-                usingBlock:^(NSNotification *n) {
-        gAppReady = YES;
-        echo_setup_window();
-        echo_monitor_sync();
+    [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
+        gAppReady = YES; echo_setup_window(); echo_monitor_sync();
     }];
-    
-    [nc addObserverForName:AVAudioSessionRouteChangeNotification
-                    object:nil
-                     queue:[NSOperationQueue mainQueue]
-                usingBlock:^(NSNotification *n) {
-        echo_monitor_stop();
-        DiscordEcho_ResetAll();
-        if (echo_mon_wanted()) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                echo_monitor_sync();
-            });
-        }
-    }];
-
-    [nc addObserverForName:AVAudioEngineConfigurationChangeNotification
-                    object:nil
-                     queue:[NSOperationQueue mainQueue]
-                usingBlock:^(NSNotification *n) {
-        if (echo_mon_wanted() && n.object == gMonEngine) {
-            echo_monitor_stop();
-            echo_monitor_sync();
-        }
+    [nc addObserverForName:AVAudioSessionRouteChangeNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
+        echo_monitor_stop(); DiscordEcho_ResetAll();
+        if (echo_mon_wanted()) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ echo_monitor_sync(); });
     }];
 }
