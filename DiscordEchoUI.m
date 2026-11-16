@@ -31,6 +31,7 @@ extern void DiscordEcho_SetMonitor(int on);
 extern void DiscordEcho_SetMonitorVolume(int v);
 extern void DiscordEcho_SetGain(int v);
 extern void DiscordEcho_SetPitch(int v);
+extern void DiscordEcho_SetFormant(int v);
 extern void DiscordEcho_SetRobot(int on);
 extern void DiscordEcho_SetVoiceMute(int on);
 extern float DiscordEcho_GetPeak(void);
@@ -82,6 +83,7 @@ enum {
     S_REPAMT, S_TAPSPEED, S_TAPFB, S_TAPSCAT,
     S_EQLOF, S_EQHIF, S_EQLO, S_EQMID, S_EQHI,
     S_GAIN, S_MUSVOL, S_MONVOL, S_SELFVOL,
+    S_FORMANT,
     S_COUNT
 };
 
@@ -104,6 +106,7 @@ static const SliderSpec kSliders[S_COUNT] = {
     [S_GAIN]     = { @"تضخيم الصوت",           @"%",    @"DiscordEchoGain",  100, 1600, 100, DiscordEcho_SetGain,          nil },
     [S_MUSVOL]   = { @"مستوى الأغنية",         @"%",    @"DiscordEchoMusicVol", 0, 200, 100, DiscordEcho_MusicSetVolume,  nil },
     [S_MONVOL]   = { @"مستوى سماعك للأغنية",   @"%",    @"DiscordEchoMonVol",  0, 200, 100, DiscordEcho_SetMonitorVolume, nil },
+    [S_FORMANT]  = { @"شكل الصوت (فورمانت)",    @"%",    @"DiscordEchoFormant", -30, 30,   0, DiscordEcho_SetFormant,         nil },
     [S_SELFVOL]  = { @"مستوى سماعك لصوتك",     @"%",    @"DiscordEchoSelfVol", 0, 200, 100, DiscordEcho_SetSelfMonitorVolume, nil },
 };
 
@@ -371,7 +374,7 @@ static NSString *EchoTime(float s) {
     [self.view addSubview:self.addr];
 
     NSMutableArray *q = [NSMutableArray array];
-    NSArray *names = @[@"YouTube", @"YT5s"];
+    NSArray *names = @[@"Pixabay", @"Archive"];
     for (NSInteger i = 0; i < 2; i++) {
         UIButton *b = [self pill:names[i] action:@selector(quickTapped:) tag:i];
         [self.view addSubview:b];
@@ -388,18 +391,18 @@ static NSString *EchoTime(float s) {
     self.status.font = [UIFont systemFontOfSize:12];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
     self.status.numberOfLines = 2;
-    self.status.text = @"استخدم الشاشة المنقسمة لعرض اليوتيوب وموقع التحميل معًا بكل سهولة.";
+    self.status.text = @"افتح أي موقع موسيقى حرة وتضغط زر Download، وراح ألقطها وأشغّلها. تقدر تقسم الشاشة وتفتح عدة نوافذ.";
     [self.view addSubview:self.status];
 
     NSString *savedURL = [[NSUserDefaults standardUserDefaults] stringForKey:kLastURLKey];
 
-    // التبويب الأول: يوتيوب
+    // التبويب الأول: Pixabay Music (أو آخر موقع فتحته)
     [self openTabWithConfig:nil];
-    [self loadText:(savedURL.length > 0 ? savedURL : @"https://www.youtube.com")];
+    [self loadText:(savedURL.length > 0 ? savedURL : @"https://pixabay.com/music/")];
 
-    // التبويب الثاني: موقع التحميل الجديد المطلوب
+    // التبويب الثاني: Internet Archive
     [self openTabWithConfig:nil];
-    [self loadText:@"https://yt5s.in/ar270/"];
+    [self loadText:@"https://archive.org/details/audio"];
 
     [self selectTab:0];
 }
@@ -477,7 +480,7 @@ static NSString *EchoTime(float s) {
     CGFloat x = 8;
     for (NSInteger i = 0; i < (NSInteger)self.tabs.count; i++) {
         NSString *t = self.tabs[i].title;
-        if (t.length == 0) t = (i == 0) ? @"YouTube" : (i == 1 ? @"YT5s" : @"نافذة");
+        if (t.length == 0) t = @"نافذة";
         if (t.length > 14) t = [[t substringToIndex:14] stringByAppendingString:@"…"];
         UIButton *b = [self pill:t action:@selector(tabTapped:) tag:i];
         b.frame = CGRectMake(x, 0, 104, 32);
@@ -548,7 +551,7 @@ static NSString *EchoTime(float s) {
 - (void)backTapped { if (self.web.canGoBack) [self.web goBack]; }
 
 - (void)quickTapped:(UIButton *)b {
-    NSArray *urls = @[@"https://www.youtube.com", @"https://yt5s.in/ar270/"];
+    NSArray *urls = @[@"https://pixabay.com/music/", @"https://archive.org/details/audio"];
     [self loadText:urls[b.tag]];
 }
 
@@ -920,15 +923,19 @@ static NSString *EchoTime(float s) {
     self.pitchSlider = [self makeSliderAt:CGRectMake(16, 32, w, 30) min:-12 max:12 value:pitch action:@selector(pitchChanged:)];
     [tabPitch addSubview:self.pitchSlider];
 
-    NSArray *names = @[@"عادي", @"بنت", @"رجل", @"وحش", @"روبوت", @"🎲 عشوائي"];
+    y = [self addSlider:S_FORMANT to:tabPitch y:66];
+
+    NSArray *names = @[@"عادي", @"👧 بنت ناعمة", @"🧒 بنت صغيرة", @"👨 رجل", @"👹 وحش", @"🤖 روبوت", @"🎲 عشوائي"];
     CGFloat pbw = (w - 16) / 3.0;
-    for (NSInteger i = 0; i < 6; i++) {
+    for (NSInteger i = 0; i < 7; i++) {
         NSInteger col = i % 3, row = i / 3;
-        CGRect f = CGRectMake(16 + col * (pbw + 8), 76 + row * 42, pbw, 34);
+        CGRect f = CGRectMake(16 + col * (pbw + 8), y + 6 + row * 42, pbw, 34);
         [tabPitch addSubview:[self makeButton:names[i] frame:f tag:i action:@selector(presetTapped:)]];
     }
-    [self addHint:@"حرّك الشريط أو اختر نمط جاهز." to:tabPitch y:164 height:40];
-    tabPitch.contentSize = CGSizeMake(kPanelW, 230);
+    y += 6 + 3 * 42 + 4;
+    y = [self addHint:@"النبرة ترفع أو تنزّل طبقة الصوت، وشكل الصوت (فورمانت) يخلّي الصوت أنحف (موجب) أو أغلظ (سالب).\nصوت البنت الطبيعي = نبرة +5 إلى +7 مع شكل صوت +12 إلى +20. لو طلع كأنه سنجاب نزّل النبرة أو شكل الصوت.\nأحسن شي تجرّبه بأذنك وتعدّل."
+                   to:tabPitch y:y height:78];
+    tabPitch.contentSize = CGSizeMake(kPanelW, y + 10);
 
     // تبويب المضخّم
     y = 4;
@@ -1100,7 +1107,7 @@ static NSString *EchoTime(float s) {
     [self setSpec:S_DAMP to:65];
 }
 
-- (void)applyPitch:(int)st robot:(BOOL)robot {
+- (void)applyPitch:(int)st formant:(int)fm robot:(BOOL)robot {
     if (st < -12) st = -12;
     if (st > 12) st = 12;
     self.pitchSlider.value = st;
@@ -1109,19 +1116,29 @@ static NSString *EchoTime(float s) {
     DiscordEcho_SetRobot(robot ? 1 : 0);
     [self saveInt:st key:kPitchKey];
     [self saveInt:robot ? 1 : 0 key:kRobotKey];
+    [self setSpec:S_FORMANT to:fm];
     [self updatePitchLabel];
 }
-- (void)pitchChanged:(UISlider *)s { [self applyPitch:(int)lroundf(s.value) robot:self.robot]; }
+- (void)pitchChanged:(UISlider *)s {
+    int st = (int)lroundf(s.value);
+    DiscordEcho_SetPitch(st);
+    [self saveInt:st key:kPitchKey];
+    [self updatePitchLabel];
+}
 - (void)presetTapped:(UIButton *)b {
     switch (b.tag) {
-        case 0: [self applyPitch:0  robot:NO];  break;
-        case 1: [self applyPitch:5  robot:NO];  break;
-        case 2: [self applyPitch:-4 robot:NO];  break;
-        case 3: [self applyPitch:-9 robot:NO];  break;
-        case 4: [self applyPitch:0  robot:YES]; break;
-        default: {
-            int st = (int)arc4random_uniform(21) - 10;
-            [self applyPitch:st robot:(arc4random_uniform(4) == 0)];
+        case 0: [self applyPitch:0  formant:0   robot:NO];  break;   // عادي
+        case 1: [self applyPitch:6  formant:16  robot:NO];  break;   // بنت ناعمة
+        case 2: [self applyPitch:8  formant:24  robot:NO];  break;   // بنت صغيرة
+        case 3: [self applyPitch:-4 formant:-12 robot:NO];  break;   // رجل
+        case 4: [self applyPitch:-8 formant:-22 robot:NO];  break;   // وحش
+        case 5: [self applyPitch:0  formant:0   robot:YES]; break;   // روبوت
+        default: {                                                      // عشوائي
+            int st = (int)arc4random_uniform(17) - 8;
+            int fm = st * 3;
+            if (fm > 30) fm = 30;
+            if (fm < -30) fm = -30;
+            [self applyPitch:st formant:fm robot:(arc4random_uniform(5) == 0)];
         }
     }
 }
