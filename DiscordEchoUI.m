@@ -27,6 +27,7 @@ extern void DiscordEcho_SetEqMid(int v);
 extern void DiscordEcho_SetEqHi(int v);
 extern void DiscordEcho_SetMode(int v);
 extern void DiscordEcho_SetSongEcho(int on);
+extern void DiscordEcho_SetSongPrivate(int on);
 extern void DiscordEcho_SetMonitor(int on);
 extern void DiscordEcho_SetMonitorVolume(int v);
 extern void DiscordEcho_SetGain(int v);
@@ -114,7 +115,7 @@ typedef struct {
     void (*set)(int);
 } ToggleSpec;
 
-enum { T_CAVE, T_REPEAT, T_LOOP, T_MUTE, T_SONGECHO, T_MONITOR, T_SELFMON, T_MICMUTE, T_COUNT };
+enum { T_CAVE, T_REPEAT, T_LOOP, T_MUTE, T_SONGECHO, T_PRIVATE, T_MONITOR, T_SELFMON, T_MICMUTE, T_COUNT };
 
 #pragma mark - مراقبة الصوت
 
@@ -190,14 +191,15 @@ static BOOL echo_headphones(void) {
 }
 
 static const ToggleSpec kToggles[T_COUNT] = {
-    [T_CAVE]     = { @"كهف 👻",                    @"DiscordEchoCave",     1, DiscordEcho_SetCave },
-    [T_REPEAT]   = { @"تكرار 🔁",                  @"DiscordEchoRepeat",   1, DiscordEcho_SetRepeat },
-    [T_LOOP]     = { @"🔁 تكرار الأغنية",          @"DiscordEchoMusicLoop", 0, DiscordEcho_MusicSetLoop },
-    [T_MUTE]     = { @"🔇 كتم صوتي أثناء الأغنية", @"DiscordEchoVoiceMute", 0, DiscordEcho_SetVoiceMute },
-    [T_SONGECHO] = { @"👻 الصدى على الأغنية",      @"DiscordEchoSongEcho", 1, DiscordEcho_SetSongEcho },
-    [T_MONITOR]  = { @"🎧 أنا أسمع الأغنية",       @"DiscordEchoMonitor",  0, echo_set_monitor },
-    [T_SELFMON]  = { @"🎧 أسمع صوتي (مع الصدى)",   @"DiscordEchoSelfMon",  0, echo_set_selfmon },
-    [T_MICMUTE]  = { @"🎙️ كتم المايك / تشغيله",    @"DiscordEchoMicMute",  0, DiscordEcho_SetVoiceMute },
+    [T_CAVE]     = { @"كهف 👻",                         @"DiscordEchoCave",     1, DiscordEcho_SetCave },
+    [T_REPEAT]   = { @"تكرار 🔁",                       @"DiscordEchoRepeat",   1, DiscordEcho_SetRepeat },
+    [T_LOOP]     = { @"🔁 تكرار الأغنية",               @"DiscordEchoMusicLoop", 0, DiscordEcho_MusicSetLoop },
+    [T_MUTE]     = { @"🔇 كتم صوتي أثناء الأغنية",      @"DiscordEchoVoiceMute", 0, DiscordEcho_SetVoiceMute },
+    [T_SONGECHO] = { @"👻 الصدى على الأغنية",           @"DiscordEchoSongEcho", 1, DiscordEcho_SetSongEcho },
+    [T_PRIVATE]  = { @"🤫 اسمعها لحالي (لا تطلع بالمايك)", @"DiscordEchoSongPriv", 0, DiscordEcho_SetSongPrivate },
+    [T_MONITOR]  = { @"🎧 أنا أسمع الأغنية",            @"DiscordEchoMonitor",  0, echo_set_monitor },
+    [T_SELFMON]  = { @"🎧 أسمع صوتي (مع الصدى)",        @"DiscordEchoSelfMon",  0, echo_set_selfmon },
+    [T_MICMUTE]  = { @"🎙️ كتم المايك / تشغيله",         @"DiscordEchoMicMute",  0, DiscordEcho_SetVoiceMute },
 };
 
 static NSString *const kEqPresetNames[5] = { @"مسطح", @"دافئ", @"ناعم", @"صافي", @"بدون جهير" };
@@ -392,7 +394,6 @@ static NSString *EchoTime(float s) {
     self.status.text = @"متصفح متعدد النوافذ يدعم الحفظ التلقائي لكل تبويب بكل سلاسة.";
     [self.view addSubview:self.status];
 
-    // استرجاع آخر روابط النوافذ المحفوظة أو فتح النوافذ الافتراضية
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSArray *savedURLs = [defaults arrayForKey:@"DiscordEchoBrowserTabsURLs"];
     
@@ -1018,11 +1019,12 @@ static NSString *EchoTime(float s) {
 
     y = 182;
     y = [self addSlider:S_MUSVOL to:tabMusic y:y];
-    [self addToggle:T_LOOP     to:tabMusic x:16 y:y width:w]; y += 36;
-    [self addToggle:T_MUTE     to:tabMusic x:16 y:y width:w]; y += 36;
-    [self addToggle:T_SONGECHO to:tabMusic x:16 y:y width:w]; y += 36;
+    [self addToggle:T_PRIVATE  to:tabMusic x:16 y:y width:w]; y += 36;
     [self addToggle:T_MONITOR  to:tabMusic x:16 y:y width:w]; y += 40;
     y = [self addSlider:S_MONVOL to:tabMusic y:y];
+    [self addToggle:T_LOOP     to:tabMusic x:16 y:y width:w]; y += 36;
+    [self addToggle:T_MUTE     to:tabMusic x:16 y:y width:w]; y += 36;
+    [self addToggle:T_SONGECHO to:tabMusic x:16 y:y width:w]; y += 40;
     y = [self addHint:@"🌐 المتصفح: ابحث، تصفح مواقع MP3، وحمّل المقاطع مباشرة."
                    to:tabMusic y:y height:60];
     tabMusic.contentSize = CGSizeMake(kPanelW, y + 10);
@@ -1083,6 +1085,10 @@ static NSString *EchoTime(float s) {
     const ToggleSpec *t = &kToggles[s.tag];
     t->set(s.on ? 1 : 0);
     [self saveInt:s.on ? 1 : 0 key:t->key];
+    // إذا شغل المستخدم "اسمعها لحالي"، نفعل المراقبة تلقائياً عشان يسمعها في سماعاته
+    if (s.tag == T_PRIVATE && s.on && !_sw[T_MONITOR].on) {
+        [self setToggle:T_MONITOR on:YES];
+    }
 }
 
 - (void)refreshModeButtons {
