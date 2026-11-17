@@ -611,7 +611,6 @@ static OSStatus my_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
     OSStatus st = orig_render(unit, flags, ts, bus, frames, io);
     if (st != noErr || bus != 1 || io == NULL) return st;
 
-    // تحديث ديناميكي للـ Sample Rate لتلافي مشاكل البلوتوث وتغير الترددات فجأة
     UInt32 sz = sizeof(g_fmt);
     AudioStreamBasicDescription currentFmt;
     if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat,
