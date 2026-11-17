@@ -4,8 +4,7 @@
 //   - موازن ترددات (EQ) للصدى + تغميق الذيل + تنعيم الموجة (modulation)
 //   - مودات صدى جاهزة، كل واحد لحاله: ديلاي، ديلاي شريط، غرفة، قاعة، ستاديوم، فضاء
 //   - تضخيم الصوت 100%..1600% مع حد ناعم
-//   - مشغّل أغنية (بما فيها اليوتيوب): تتمزج داخل المايك + يطبّق عليها الصدى + تسمعها أنت (مراقبة)
-// يعمل عبر fishhook: يستبدل AudioUnitRender ويعدّل بيانات المايك قبل ما يرسلها التطبيق.
+//   - مشغّل أغنية (بما فيها اليوتيوب): تتمزج داخل المايك أو تسمعها لحالك فقط
 
 #include <AudioToolbox/AudioToolbox.h>
 #include <stdint.h>
@@ -18,40 +17,41 @@
 #define MAX_BUFS 2
 #define LINE_LEN (MAX_RATE * 4)
 #define MUSIC_TMP 8192
-#define NCTX (MAX_BUFS + 1)      // قناتين للمايك + واحد للأغنية
+#define NCTX (MAX_BUFS + 1)
 #define SONG_CTX MAX_BUFS
 
 // ---------- إعدادات تتغير من القائمة ----------
-static volatile int   g_level = 50;     // شدة الصدى 0..100
-static volatile int   g_boost = 100;    // مضخّم الصدى 100..400 (%)
-static volatile int   g_range = 60;     // مدى الصدى 0..100
-static volatile int   g_cave  = 1;      // كهف
-static volatile int   g_repeat = 1;     // تكرار
-static volatile int   g_cave_amt = 100; // شدة الكهف 0..100
-static volatile int   g_rep_amt = 100;  // شدة التكرار 0..100
-static volatile int   g_tap_speed = 100;// سرعة/تردد التكرار 50..300 (%)
-static volatile int   g_tap_fb = 60;    // عدد التكرارات 0..100
-static volatile int   g_tap_scatter = 100; // التبعثر 0..100
-static volatile int   g_damp = 40;      // تغميق الذيل 0..100
-static volatile int   g_mod = 50;       // تنعيم الموجة 0..100
-static volatile int   g_eq_lo_f = 200;  // تردد حد الجهير (Hz)
-static volatile int   g_eq_hi_f = 3500; // تردد حد الحاد (Hz)
-static volatile int   g_eq_lo = 100;    // قوة الجهير 0..200 (%)
-static volatile int   g_eq_mid = 100;   // قوة الوسط 0..200 (%)
-static volatile int   g_eq_hi = 100;    // قوة الحاد 0..200 (%)
-static volatile int   g_mode = 0;       // 0 = كهف مسكون، 1..6 = مودات جاهزة
-static volatile int   g_song_echo = 1;  // تطبيق الصدى على الأغنية
-static volatile int   g_monitor = 0;    // أنت تسمع الأغنية
-static volatile int   g_mon_vol = 100;  // مستوى المراقبة 0..200
-static volatile int   g_gain  = 100;    // تضخيم الصوت 100..1600 (%)
-static volatile int   g_pitch = 0;      // نغمات -12..12
-static volatile int   g_robot = 0;      // 0/1
-static volatile int   g_voice_mute = 0; // كتم صوتي أثناء الأغنية
-static volatile float g_peak  = 0.0f;   // مستوى المايك 0..1
+static volatile int   g_level = 50;
+static volatile int   g_boost = 100;
+static volatile int   g_range = 60;
+static volatile int   g_cave  = 1;
+static volatile int   g_repeat = 1;
+static volatile int   g_cave_amt = 100;
+static volatile int   g_rep_amt = 100;
+static volatile int   g_tap_speed = 100;
+static volatile int   g_tap_fb = 60;
+static volatile int   g_tap_scatter = 100;
+static volatile int   g_damp = 40;
+static volatile int   g_mod = 50;
+static volatile int   g_eq_lo_f = 200;
+static volatile int   g_eq_hi_f = 3500;
+static volatile int   g_eq_lo = 100;
+static volatile int   g_eq_mid = 100;
+static volatile int   g_eq_hi = 100;
+static volatile int   g_mode = 0;
+static volatile int   g_song_echo = 1;
+static volatile int   g_song_private = 0; // 1 = سماع خاص لك فقط (ما تطلع بالمايك)
+static volatile int   g_monitor = 0;
+static volatile int   g_mon_vol = 100;
+static volatile int   g_gain  = 100;
+static volatile int   g_pitch = 0;
+static volatile int   g_robot = 0;
+static volatile int   g_voice_mute = 0;
+static volatile float g_peak  = 0.0f;
 
-static volatile int   g_selfmon = 0;      // أسمع صوتي (بعد المعالجة)
-static volatile int   g_selfmon_vol = 100;// مستوى سماع صوتي 0..200
-static volatile unsigned g_render_count = 0; // عدّاد دفعات المايك
+static volatile int   g_selfmon = 0;
+static volatile int   g_selfmon_vol = 100;
+static volatile unsigned g_render_count = 0;
 
 static int clampi(int v, int a, int b) { return v < a ? a : (v > b ? b : v); }
 
@@ -74,6 +74,7 @@ void DiscordEcho_SetEqMid(int v)  { g_eq_mid = clampi(v, 0, 200); }
 void DiscordEcho_SetEqHi(int v)   { g_eq_hi = clampi(v, 0, 200); }
 void DiscordEcho_SetMode(int v)   { g_mode = clampi(v, 0, 6); }
 void DiscordEcho_SetSongEcho(int on) { g_song_echo = on ? 1 : 0; }
+void DiscordEcho_SetSongPrivate(int on) { g_song_private = on ? 1 : 0; }
 void DiscordEcho_SetMonitor(int on) { g_monitor = on ? 1 : 0; }
 void DiscordEcho_SetMonitorVolume(int v) { g_mon_vol = clampi(v, 0, 200); }
 void DiscordEcho_SetGain(int v)   { g_gain = clampi(v, 100, 1600); }
@@ -529,8 +530,8 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
     int echo_on = echo_enabled();
     int ps_on = (semis != 0) && chans == 1;
     int robot_on = g_robot && chans == 1;
-    int mute = g_voice_mute && mus != NULL;
-    int changed = echo_on || ps_on || robot_on || gn != 100 || mus != NULL;
+    int mute = g_voice_mute && (mus != NULL || g_mplaying);
+    int changed = echo_on || ps_on || robot_on || gn != 100 || mus != NULL || mute;
 
     if (!changed) {
         float pk = 0.0f;
@@ -595,7 +596,8 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
         float a = y < 0 ? -y : y;
         if (a > pk) pk = a;
 
-        if (mus && fi < mus_frames) y = soft_limit(y + mus[fi]);
+        // دمج الأغنية مع المايك فقط إذا لم يكن الخيار "اسمعها لحالي" مفعل
+        if (mus && !g_song_private && fi < mus_frames) y = soft_limit(y + mus[fi]);
 
         if (is_float) ((float *)ab->mData)[i] = y;
         else          ((int16_t *)ab->mData)[i] = (int16_t)(y * 32767.0f);
@@ -661,14 +663,14 @@ static OSStatus my_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
     if (self_on) memset(g_voice, 0, frames * sizeof(float));
     for (UInt32 b = 0; b < io->mNumberBuffers && b < MAX_BUFS; b++) {
         if (io->mBuffers[b].mData)
-            process_buffer((int)b, &io->mBuffers[b], have_song ? g_sout : NULL, frames,
+            process_buffer((int)b, &io->mBuffers[b], (have_song && !g_song_private) ? g_sout : NULL, frames,
                            (b == 0 && self_on) ? g_voice : NULL);
     }
 
-    if (frames <= MUSIC_TMP && (g_monitor || self_on)) {
+    if (frames <= MUSIC_TMP && (g_monitor || self_on || g_song_private)) {
         float sv = (float)g_mon_vol / 100.0f;
         float vv = (float)g_selfmon_vol / 100.0f;
-        int song_mon = g_monitor && have_song;
+        int song_mon = (g_monitor || g_song_private) && have_song;
         for (UInt32 i = 0; i < frames; i++) {
             float m = 0.0f;
             if (song_mon) m += g_sout[i] * sv;
