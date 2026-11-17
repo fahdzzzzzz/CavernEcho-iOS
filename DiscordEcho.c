@@ -1,4 +1,12 @@
-// DiscordEcho: معالج صوت المايك داخل تطبيق (مثل ديسكورد) مع دعم محرك الـ AI الحقيقي
+// DiscordEcho: معالج صوت المايك داخل تطبيق (مثل ديسكورد)
+//   - تغيير النبرة (pitch) من -12 إلى +12 نغمة + صوت روبوت
+//   - صدى "كهف مسكون": تكرار مبعثر (Multi-Tap Delay) + كهف (reverb) مع تحكم كامل
+//   - موازن ترددات (EQ) للصدى + تغميق الذيل + تنعيم الموجة (modulation)
+//   - مودات صدى جاهزة، كل واحد لحاله: ديلاي، ديلاي شريط، غرفة، قاعة، ستاديوم، فضاء
+//   - تضخيم الصوت 100%..1600% مع حد ناعم
+//   - مشغّل أغنية (بما فيها اليوتيوب): تتمزج داخل المايك + يطبّق عليها الصدى + تسمعها أنت (مراقبة)
+// يعمل عبر fishhook: يستبدل AudioUnitRender ويعدّل بيانات المايك قبل ما يرسلها التطبيق.
+
 #include <AudioToolbox/AudioToolbox.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -10,7 +18,7 @@
 #define MAX_BUFS 2
 #define LINE_LEN (MAX_RATE * 4)
 #define MUSIC_TMP 8192
-#define NCTX (MAX_BUFS + 1)
+#define NCTX (MAX_BUFS + 1)      // قناتين للمايك + واحد للأغنية
 #define SONG_CTX MAX_BUFS
 
 // ---------- إعدادات تتغير من القائمة ----------
@@ -38,8 +46,6 @@ static volatile int   g_mon_vol = 100;  // مستوى المراقبة 0..200
 static volatile int   g_gain  = 100;    // تضخيم الصوت 100..1600 (%)
 static volatile int   g_pitch = 0;      // نغمات -12..12
 static volatile int   g_robot = 0;      // 0/1
-static volatile int   g_ai_voice = 0;   // 0/1 تفعيل محرك الـ AI
-static volatile int   g_ai_model = 0;   // رقم موديل الصوت
 static volatile int   g_voice_mute = 0; // كتم صوتي أثناء الأغنية
 static volatile float g_peak  = 0.0f;   // مستوى المايك 0..1
 
@@ -73,8 +79,6 @@ void DiscordEcho_SetMonitorVolume(int v) { g_mon_vol = clampi(v, 0, 200); }
 void DiscordEcho_SetGain(int v)   { g_gain = clampi(v, 100, 1600); }
 void DiscordEcho_SetPitch(int v)  { g_pitch = clampi(v, -12, 12); }
 void DiscordEcho_SetRobot(int on) { g_robot = on ? 1 : 0; }
-void DiscordEcho_SetAIVoice(int on) { g_ai_voice = on ? 1 : 0; }
-void DiscordEcho_SetAIModel(int id) { g_ai_model = clampi(id, 0, 5); }
 void DiscordEcho_SetVoiceMute(int on) { g_voice_mute = on ? 1 : 0; }
 float DiscordEcho_GetPeak(void)   { return g_peak; }
 void DiscordEcho_SetSelfMonitor(int on) { g_selfmon = on ? 1 : 0; }
@@ -137,6 +141,7 @@ void DiscordEcho_ResetAll(void) {
     g_stail = 0.0f;
 }
 
+// ---------- حد ناعم ----------
 static float soft_limit(float y) {
     float a = y < 0 ? -y : y;
     if (a <= 0.6f) return y;
@@ -147,6 +152,7 @@ static float soft_limit(float y) {
 static const int kCombBase[RV_COMBS] = {1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617};
 static const int kApBase[RV_APS] = {556, 441, 341, 225};
 
+// ---------- بارامترات الصدى ----------
 typedef struct {
     int kind;
     int rep, cave, tape;
@@ -355,24 +361,6 @@ static float ps_process(PitchShifter *ps, float x, float ratio) {
     return y;
 }
 
-// ---------- دالة معالجة محرك الـ AI المتقدمة (بديلة للنبرات التقليدية) ----------
-static float g_ai_buffer[2048];
-static int   g_ai_pos = 0;
-
-static float ai_voice_process(float x, int model_id) {
-    if (!g_ai_voice) return x;
-    
-    // تخزين العينة الحية في المخزن المؤقت للفلترة الطيفية
-    g_ai_buffer[g_ai_pos & 2047] = x;
-    
-    // محاكاة تحويل النبرة عبر إزاحة وتنعيم زمني متطور لإعطاء طابع صوتي مغاير للصوت الأصلي
-    int shifted_idx = (g_ai_pos - 16) & 2047;
-    float processed = (g_ai_buffer[shifted_idx] * 0.7f) + (x * 0.3f);
-    
-    g_ai_pos++;
-    return soft_limit(processed * 1.3f);
-}
-
 // ---------- مشغّل الأغنية ----------
 typedef struct { float *data; size_t len; } MusicSlot;
 static MusicSlot g_mslot[2];
@@ -462,6 +450,7 @@ static int music_generate(float *out, UInt32 frames, float rate) {
     return 1;
 }
 
+// ---------- مراقبة الصوت ----------
 #define MON_LEN (1 << 17)
 static float g_mon[MON_LEN];
 static volatile unsigned g_mon_w = 0, g_mon_r = 0;
@@ -506,6 +495,7 @@ void DiscordEcho_MonitorRead(float *out, unsigned n, double outRate) {
     g_mon_r = r;
 }
 
+// ---------- الهوك الأساسي ----------
 static AudioUnit g_unit;
 static AudioStreamBasicDescription g_fmt;
 static int g_have_fmt;
@@ -537,11 +527,10 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
     int semis = g_pitch;
 
     int echo_on = echo_enabled();
-    int ai_on = g_ai_voice;
-    int ps_on = (semis != 0) && chans == 1 && !ai_on;
+    int ps_on = (semis != 0) && chans == 1;
     int robot_on = g_robot && chans == 1;
     int mute = g_voice_mute && mus != NULL;
-    int changed = echo_on || ps_on || robot_on || ai_on || gn != 100 || mus != NULL;
+    int changed = echo_on || ps_on || robot_on || gn != 100 || mus != NULL;
 
     if (!changed) {
         float pk = 0.0f;
@@ -590,12 +579,7 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
                            : ((int16_t *)ab->mData)[i] / 32768.0f;
         float y = mute ? 0.0f : x;
 
-        // تطبيق معالجة الـ AI حصرياً عند تفعيل زر الـ AI
-        if (ai_on) {
-            y = ai_voice_process(y, g_ai_model);
-        } else if (ps_on) {
-            y = ps_process(ps, y, ratio);
-        }
+        if (ps_on) y = ps_process(ps, y, ratio);
 
         if (robot_on) {
             y *= 1.4f * sinf(g_robot_phase);
@@ -627,6 +611,7 @@ static OSStatus my_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
     OSStatus st = orig_render(unit, flags, ts, bus, frames, io);
     if (st != noErr || bus != 1 || io == NULL) return st;
 
+    // تحديث ديناميكي للـ Sample Rate لتلافي مشاكل البلوتوث وتغير الترددات فجأة
     UInt32 sz = sizeof(g_fmt);
     AudioStreamBasicDescription currentFmt;
     if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat,
