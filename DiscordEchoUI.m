@@ -114,7 +114,7 @@ typedef struct {
     void (*set)(int);
 } ToggleSpec;
 
-enum { T_CAVE, T_REPEAT, T_LOOP, T_MUTE, T_SONGECHO, T_MONITOR, T_SELFMON, T_COUNT };
+enum { T_CAVE, T_REPEAT, T_LOOP, T_MUTE, T_SONGECHO, T_MONITOR, T_SELFMON, T_MICMUTE, T_COUNT };
 
 #pragma mark - مراقبة الصوت
 
@@ -197,6 +197,7 @@ static const ToggleSpec kToggles[T_COUNT] = {
     [T_SONGECHO] = { @"👻 الصدى على الأغنية",      @"DiscordEchoSongEcho", 1, DiscordEcho_SetSongEcho },
     [T_MONITOR]  = { @"🎧 أنا أسمع الأغنية",       @"DiscordEchoMonitor",  0, echo_set_monitor },
     [T_SELFMON]  = { @"🎧 أسمع صوتي (مع الصدى)",   @"DiscordEchoSelfMon",  0, echo_set_selfmon },
+    [T_MICMUTE]  = { @"🎙️ كتم المايك / تشغيله",    @"DiscordEchoMicMute",  0, DiscordEcho_SetVoiceMute },
 };
 
 static NSString *const kEqPresetNames[5] = { @"مسطح", @"دافئ", @"ناعم", @"صافي", @"بدون جهير" };
@@ -304,18 +305,18 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - متصفح داخلي (مع شاشة منقسمة، تبويبات غير محدودة، وتحميل مباشر)
+#pragma mark - متصفح داخلي (مع حفظ الروابط الحالية لكل نافذة وتحديثها تلقائياً)
 
 @interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
 @property (nonatomic, strong) NSMutableArray<WKWebView *> *tabs;
 @property (nonatomic) NSInteger cur;
-@property (nonatomic) BOOL isSplitScreen; // خاصية الشاشة المنقسمة
+@property (nonatomic) BOOL isSplitScreen;
 @property (nonatomic, strong) UIScrollView *tabBar;
 @property (nonatomic, strong) UITextField *addr;
 @property (nonatomic, strong) UIButton *closeBtn;
 @property (nonatomic, strong) UIButton *backBtn;
-@property (nonatomic, strong) UIButton *splitBtn; // زر التقسيم
+@property (nonatomic, strong) UIButton *splitBtn;
 @property (nonatomic, strong) NSArray<UIButton *> *quick;
 @property (nonatomic, strong) UILabel *status;
 @property (nonatomic, strong) NSMutableDictionary<NSValue *, NSURL *> *dests;
@@ -388,20 +389,42 @@ static NSString *EchoTime(float s) {
     self.status.font = [UIFont systemFontOfSize:12];
     self.status.textColor = [UIColor colorWithWhite:1 alpha:0.7];
     self.status.numberOfLines = 2;
-    self.status.text = @"استخدم الشاشة المنقسمة لعرض اليوتيوب وموقع التحميل معًا بكل سهولة.";
+    self.status.text = @"متصفح متعدد النوافذ يدعم الحفظ التلقائي لكل تبويب بكل سلاسة.";
     [self.view addSubview:self.status];
 
-    NSString *savedURL = [[NSUserDefaults standardUserDefaults] stringForKey:kLastURLKey];
+    // استرجاع آخر روابط النوافذ المحفوظة أو فتح النوافذ الافتراضية
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSArray *savedURLs = [defaults arrayForKey:@"DiscordEchoBrowserTabsURLs"];
+    
+    if (savedURLs && savedURLs.count > 0) {
+        for (NSString *urlString in savedURLs) {
+            WKWebView *w = [self openTabWithConfig:nil];
+            NSURL *u = [NSURL URLWithString:urlString];
+            if (u) {
+                [w loadRequest:[NSURLRequest requestWithURL:u]];
+            }
+        }
+    } else {
+        [self openTabWithConfig:nil];
+        [self loadText:@"https://www.youtube.com"];
 
-    // التبويب الأول: يوتيوب
-    [self openTabWithConfig:nil];
-    [self loadText:(savedURL.length > 0 ? savedURL : @"https://www.youtube.com")];
-
-    // التبويب الثاني: موقع التحميل الجديد المطلوب
-    [self openTabWithConfig:nil];
-    [self loadText:@"https://yt5s.in/ar270/"];
+        [self openTabWithConfig:nil];
+        [self loadText:@"https://yt5s.in/ar270/"];
+    }
 
     [self selectTab:0];
+}
+
+- (void)saveCurrentTabsState {
+    NSMutableArray *urlsArray = [NSMutableArray array];
+    for (WKWebView *w in self.tabs) {
+        if (w.URL && w.URL.absoluteString.length > 0) {
+            [urlsArray addObject:w.URL.absoluteString];
+        } else {
+            [urlsArray addObject:@"https://www.google.com"];
+        }
+    }
+    [[NSUserDefaults standardUserDefaults] setObject:urlsArray forKey:@"DiscordEchoBrowserTabsURLs"];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -409,7 +432,6 @@ static NSString *EchoTime(float s) {
     CGRect b = self.view.bounds;
     CGFloat top = 10;
     
-    // ترتيب الأزرار العلوية بشكل متناسق
     self.backBtn.frame = CGRectMake(12, top, 56, 34);
     self.splitBtn.frame = CGRectMake(74, top, 64, 34);
     self.closeBtn.frame = CGRectMake(b.size.width - 72, top, 60, 34);
@@ -426,7 +448,6 @@ static NSString *EchoTime(float s) {
     CGFloat startY = 130;
     CGFloat totalH = b.size.height - startY - sh;
 
-    // منطق الشاشة المنقسمة أو العرض الفردي للتبويبات
     if (self.isSplitScreen && self.tabs.count >= 2) {
         CGFloat halfW = b.size.width / 2.0;
         self.tabs[0].hidden = NO;
@@ -456,6 +477,7 @@ static NSString *EchoTime(float s) {
     w.allowsBackForwardNavigationGestures = YES;
     [self.view addSubview:w];
     [self.tabs addObject:w];
+    [self saveCurrentTabsState];
     [self viewDidLayoutSubviews];
     [self selectTab:(NSInteger)self.tabs.count - 1];
     return w;
@@ -496,12 +518,7 @@ static NSString *EchoTime(float s) {
     self.tabBar.contentSize = CGSizeMake(x + 8, 34);
 }
 
-- (void)tabTapped:(UIButton *)b {
-    [self selectTab:b.tag];
-    if (self.isSplitScreen) {
-        // إذا كان مقسم، نجعل التبويب المحدد هو النصف الأول مثلاً أو نبقيه
-    }
-}
+- (void)tabTapped:(UIButton *)b { [self selectTab:b.tag]; }
 
 - (void)splitTapped {
     self.isSplitScreen = !self.isSplitScreen;
@@ -523,6 +540,7 @@ static NSString *EchoTime(float s) {
     [w removeFromSuperview];
     [self.tabs removeObjectAtIndex:self.cur];
     NSInteger n = self.cur >= (NSInteger)self.tabs.count ? (NSInteger)self.tabs.count - 1 : self.cur;
+    [self saveCurrentTabsState];
     [self selectTab:n];
 }
 
@@ -537,10 +555,7 @@ static NSString *EchoTime(float s) {
 }
 
 - (void)closeTapped {
-    NSURL *curURL = self.web.URL;
-    if (curURL) {
-        [[NSUserDefaults standardUserDefaults] setObject:curURL.absoluteString forKey:kLastURLKey];
-    }
+    [self saveCurrentTabsState];
     for (WKWebView *w in self.tabs) [w stopLoading];
     [self dismissViewControllerAnimated:YES completion:nil];
 }
@@ -568,7 +583,8 @@ static NSString *EchoTime(float s) {
     if (u) { 
         self.addr.text = u.absoluteString; 
         [[NSUserDefaults standardUserDefaults] setObject:u.absoluteString forKey:kLastURLKey];
-        [self.web loadRequest:[NSURLRequest requestWithURL:u]]; 
+        [self.web loadRequest:[NSURLRequest requestWithURL:u]];
+        [self saveCurrentTabsState];
     }
 }
 
@@ -659,12 +675,13 @@ static NSString *EchoTime(float s) {
         self.addr.text = wv.URL.absoluteString;
         [[NSUserDefaults standardUserDefaults] setObject:wv.URL.absoluteString forKey:kLastURLKey];
     }
+    [self saveCurrentTabsState];
     [self refreshTabBar];
 }
 
 @end
 
-#pragma mark - الواجهة الرئيسية (تبقى كما هي بقية الملف)
+#pragma mark - الواجهة الرئيسية
 
 @interface EchoController : UIViewController <UIDocumentPickerDelegate> {
     UISlider *_sl[S_COUNT];
@@ -941,6 +958,9 @@ static NSString *EchoTime(float s) {
         [tabAmp addSubview:[self makeButton:quickNames[i] frame:f tag:[quickTags[i] integerValue] action:@selector(gainQuick:)]];
     }
     y += 48;
+
+    [self addToggle:T_MICMUTE to:tabAmp x:16 y:y width:w];
+    y += 42;
 
     UILabel *meterLabel = [self makeLabelAt:CGRectMake(16, y, w, 18) size:13 bold:NO alpha:0.7];
     meterLabel.text = @"مستوى المايك";
