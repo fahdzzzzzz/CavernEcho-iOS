@@ -1,10 +1,5 @@
 // DiscordEcho: معالج صوت المايك داخل تطبيق (مثل ديسكورد)
-//   - تغيير النبرة (pitch) من -12 إلى +12 نغمة + صوت روبوت
-//   - صدى "كهف مسكون": تكرار مبعثر (Multi-Tap Delay) + كهف (reverb) مع تحكم كامل
-//   - موازن ترددات (EQ) للصدى + تغميق الذيل + تنعيم الموجة (modulation)
-//   - مودات صدى جاهزة، كل واحد لحاله: ديلاي، ديلاي شريط، غرفة، قاعة، ستاديوم، فضاء
-//   - تضخيم الصوت 100%..1600% مع حد ناعم
-//   - مشغّل أغنية (بما فيها اليوتيوب): تتمزج داخل المايك أو تسمعها لحالك فقط
+//   - تحسين استجابة كتم المايك وتجنب التعليق عند تنقل الرومات.
 
 #include <AudioToolbox/AudioToolbox.h>
 #include <stdint.h>
@@ -40,13 +35,14 @@ static volatile int   g_eq_mid = 100;
 static volatile int   g_eq_hi = 100;
 static volatile int   g_mode = 0;
 static volatile int   g_song_echo = 1;
-static volatile int   g_song_private = 0; // 1 = سماع خاص لك فقط (ما تطلع بالمايك)
+static volatile int   g_song_private = 0;
 static volatile int   g_monitor = 0;
 static volatile int   g_mon_vol = 100;
 static volatile int   g_gain  = 100;
 static volatile int   g_pitch = 0;
 static volatile int   g_robot = 0;
 static volatile int   g_voice_mute = 0;
+static volatile int   g_mic_mute_fast = 0; // زر الكتم السريع الجديد
 static volatile float g_peak  = 0.0f;
 
 static volatile int   g_selfmon = 0;
@@ -81,6 +77,7 @@ void DiscordEcho_SetGain(int v)   { g_gain = clampi(v, 100, 1600); }
 void DiscordEcho_SetPitch(int v)  { g_pitch = clampi(v, -12, 12); }
 void DiscordEcho_SetRobot(int on) { g_robot = on ? 1 : 0; }
 void DiscordEcho_SetVoiceMute(int on) { g_voice_mute = on ? 1 : 0; }
+void DiscordEcho_SetMicMuteFast(int on) { g_mic_mute_fast = on ? 1 : 0; }
 float DiscordEcho_GetPeak(void)   { return g_peak; }
 void DiscordEcho_SetSelfMonitor(int on) { g_selfmon = on ? 1 : 0; }
 void DiscordEcho_SetSelfMonitorVolume(int v) { g_selfmon_vol = clampi(v, 0, 200); }
@@ -142,7 +139,6 @@ void DiscordEcho_ResetAll(void) {
     g_stail = 0.0f;
 }
 
-// ---------- حد ناعم ----------
 static float soft_limit(float y) {
     float a = y < 0 ? -y : y;
     if (a <= 0.6f) return y;
@@ -153,7 +149,6 @@ static float soft_limit(float y) {
 static const int kCombBase[RV_COMBS] = {1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617};
 static const int kApBase[RV_APS] = {556, 441, 341, 225};
 
-// ---------- بارامترات الصدى ----------
 typedef struct {
     int kind;
     int rep, cave, tape;
@@ -451,7 +446,6 @@ static int music_generate(float *out, UInt32 frames, float rate) {
     return 1;
 }
 
-// ---------- مراقبة الصوت ----------
 #define MON_LEN (1 << 17)
 static float g_mon[MON_LEN];
 static volatile unsigned g_mon_w = 0, g_mon_r = 0;
@@ -496,7 +490,6 @@ void DiscordEcho_MonitorRead(float *out, unsigned n, double outRate) {
     g_mon_r = r;
 }
 
-// ---------- الهوك الأساسي ----------
 static AudioUnit g_unit;
 static AudioStreamBasicDescription g_fmt;
 static int g_have_fmt;
@@ -516,6 +509,17 @@ static int echo_enabled(void) {
 }
 
 static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mus_frames, float *voice) {
+    // إذا كان المايك مكتوم تماماً بشكل سريع، نفرغ العينات فوراً بسلاسة
+    if (g_mic_mute_fast) {
+        int is_float = (g_fmt.mFormatFlags & kAudioFormatFlagIsFloat) != 0;
+        UInt32 bits = g_fmt.mBitsPerChannel;
+        UInt32 bytes_per = bits / 8;
+        size_t n = ab->mDataByteSize / bytes_per;
+        memset(ab->mData, 0, ab->mDataByteSize);
+        update_peak(0.0f);
+        return;
+    }
+
     int is_float = (g_fmt.mFormatFlags & kAudioFormatFlagIsFloat) != 0;
     UInt32 bits = g_fmt.mBitsPerChannel;
     if (!((is_float && bits == 32) || (!is_float && bits == 16))) return;
@@ -596,7 +600,6 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
         float a = y < 0 ? -y : y;
         if (a > pk) pk = a;
 
-        // دمج الأغنية مع المايك فقط إذا لم يكن الخيار "اسمعها لحالي" مفعل
         if (mus && !g_song_private && fi < mus_frames) y = soft_limit(y + mus[fi]);
 
         if (is_float) ((float *)ab->mData)[i] = y;
@@ -613,6 +616,7 @@ static OSStatus my_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
     OSStatus st = orig_render(unit, flags, ts, bus, frames, io);
     if (st != noErr || bus != 1 || io == NULL) return st;
 
+    // حماية ضد التعليق عند تغيير الرومات أو إعدادات الهيكل الصوتي
     UInt32 sz = sizeof(g_fmt);
     AudioStreamBasicDescription currentFmt;
     if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat,
