@@ -34,6 +34,7 @@ extern void DiscordEcho_SetGain(int v);
 extern void DiscordEcho_SetPitch(int v);
 extern void DiscordEcho_SetRobot(int on);
 extern void DiscordEcho_SetVoiceMute(int on);
+extern void DiscordEcho_SetMicMuteFast(int on); // التحديث الجديد للتحكم الفوري السريع
 extern float DiscordEcho_GetPeak(void);
 extern int   DiscordEcho_MusicLoad(float *samples, size_t count);
 extern void  DiscordEcho_MusicPlay(int play);
@@ -180,6 +181,10 @@ static void echo_set_selfmon(int on) {
     echo_monitor_sync();
 }
 
+static void echo_set_micmute_fast(int on) {
+    DiscordEcho_SetMicMuteFast(on);
+}
+
 static BOOL echo_headphones(void) {
     NSArray<AVAudioSessionPortDescription *> *outs = AVAudioSession.sharedInstance.currentRoute.outputs;
     if (outs.count == 0) return YES;
@@ -199,7 +204,7 @@ static const ToggleSpec kToggles[T_COUNT] = {
     [T_PRIVATE]  = { @"🤫 اسمعها لحالي (لا تطلع بالمايك)", @"DiscordEchoSongPriv", 0, DiscordEcho_SetSongPrivate },
     [T_MONITOR]  = { @"🎧 أنا أسمع الأغنية",            @"DiscordEchoMonitor",  0, echo_set_monitor },
     [T_SELFMON]  = { @"🎧 أسمع صوتي (مع الصدى)",        @"DiscordEchoSelfMon",  0, echo_set_selfmon },
-    [T_MICMUTE]  = { @"🎙️ كتم المايك / تشغيله",         @"DiscordEchoMicMute",  0, DiscordEcho_SetVoiceMute },
+    [T_MICMUTE]  = { @"🎙️ كتم المايك / تشغيله",         @"DiscordEchoMicMute",  0, echo_set_micmute_fast },
 };
 
 static NSString *const kEqPresetNames[5] = { @"مسطح", @"دافئ", @"ناعم", @"صافي", @"بدون جهير" };
@@ -1085,7 +1090,6 @@ static NSString *EchoTime(float s) {
     const ToggleSpec *t = &kToggles[s.tag];
     t->set(s.on ? 1 : 0);
     [self saveInt:s.on ? 1 : 0 key:t->key];
-    // إذا شغل المستخدم "اسمعها لحالي"، نفعل المراقبة تلقائياً عشان يسمعها في سماعاته
     if (s.tag == T_PRIVATE && s.on && !_sw[T_MONITOR].on) {
         [self setToggle:T_MONITOR on:YES];
     }
