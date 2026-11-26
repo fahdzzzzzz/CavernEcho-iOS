@@ -967,9 +967,17 @@ static NSString *EchoTime(float s) {
 
 enum { CAM_LIVE = 0, CAM_IMAGE, CAM_VIDEO };
 
-static NSString *const kCamFilterNames[8] = { @"بدون", @"أبيض وأسود", @"سينمائي", @"قديم", @"بكسل", @"تغبيش", @"كرتون", @"معكوس" };
-static NSString *const kCamFilters[8] = { nil, @"CIPhotoEffectNoir", @"CIPhotoEffectChrome", @"CISepiaTone",
-                                          @"CIPixellate", @"CIGaussianBlur", @"CIComicEffect", @"CIColorInvert" };
+// فلاتر Core Image المدمجة في iOS؛ لا تحتاج تنزيل مكتبة خارجية.
+static NSString *const kCamFilterNames[16] = {
+    @"بدون", @"أبيض وأسود", @"سينمائي", @"قديم", @"بكسل", @"تغبيش", @"كرتون", @"معكوس",
+    @"باهت", @"فوري", @"معالجة", @"نقل", @"درجات", @"أحادي", @"تظليل", @"ألوان محدودة"
+};
+static NSString *const kCamFilters[16] = {
+    nil, @"CIPhotoEffectNoir", @"CIPhotoEffectChrome", @"CISepiaTone",
+    @"CIPixellate", @"CIGaussianBlur", @"CIComicEffect", @"CIColorInvert",
+    @"CIPhotoEffectFade", @"CIPhotoEffectInstant", @"CIPhotoEffectProcess", @"CIPhotoEffectTransfer",
+    @"CIPhotoEffectTonal", @"CIPhotoEffectMono", @"CIVignette", @"CIColorPosterize"
+};
 
 #pragma mark - مؤثرات وتغيير ملامح الوجه
 
@@ -978,6 +986,7 @@ enum {
     FX_BIGEYES, FX_BIGMOUTH, FX_PUFFY, FX_THIN, FX_BLURFACE, FX_PIXFACE,
     FX_DEVIL, FX_VAMPIRE, FX_CYBER, FX_CUSTOM, FX_SWAP,
     FX_AI_SCULPT, FX_AI_SOFT, FX_AI_SHARP,
+    FX_BUNNY, FX_ALIEN, FX_BLUSH, FX_STARS,
     FX_COUNT
 };
 
@@ -985,7 +994,8 @@ static NSString *const kFxNames[FX_COUNT] = {
     @"بدون", @"🐱 قطو", @"🤡 مهرج", @"💀 مكياج جمجمة", @"🤖 روبوت", @"🕶️ نظارة", @"🥸 شنب", @"👑 تاج", @"😍 قلوب",
     @"👀 عيون كبيرة", @"👄 فم كبير", @"🎈 وجه منفوخ", @"📏 وجه نحيف", @"🌫️ تغبيش الوجه", @"🟦 بكسل الوجه",
     @"😈 قرون", @"🧛 مصاص دماء", @"🕶️‍🗨️ سايبربانك", @"🖼️ قناعي", @"✨ دمج ملامح",
-    @"🪄 نحت AI", @"🌸 ملامح ناعمة", @"⚡ ملامح حادة"
+    @"🪄 نحت AI", @"🌸 ملامح ناعمة", @"⚡ ملامح حادة",
+    @"🐰 أرنب", @"👽 فضائي", @"🌸 خدود وردية", @"⭐ عيون نجوم"
 };
 
 static void fx_oval(CGRect r, UIColor *c) {
@@ -1129,6 +1139,42 @@ static void fx_draw(int fx) {
         [[UIColor colorWithRed:1 green:0.1 blue:0.65 alpha:0.9] setFill];
         [[UIBezierPath bezierPathWithRect:CGRectMake(220, 405, 220, 22)] fill];
         [[UIBezierPath bezierPathWithRect:CGRectMake(560, 405, 220, 22)] fill];
+    } else if (fx == FX_BUNNY) {
+        UIColor *pink = [UIColor colorWithRed:1 green:0.72 blue:0.82 alpha:0.95];
+        UIColor *inner = [UIColor colorWithRed:0.95 green:0.35 blue:0.55 alpha:0.9];
+        UIBezierPath *leftEar = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(285, 5, 145, 390)];
+        UIBezierPath *rightEar = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(570, 5, 145, 390)];
+        [pink setFill]; [leftEar fill]; [rightEar fill];
+        fx_oval(CGRectMake(320, 45, 75, 300), inner);
+        fx_oval(CGRectMake(605, 45, 75, 300), inner);
+        fx_oval(CGRectMake(430, 610, 140, 100), UIColor.whiteColor);
+    } else if (fx == FX_ALIEN) {
+        UIColor *green = [UIColor colorWithRed:0.25 green:0.88 blue:0.55 alpha:0.88];
+        fx_oval(CGRectMake(270, 330, 190, 115), green);
+        fx_oval(CGRectMake(540, 330, 190, 115), green);
+        fx_oval(CGRectMake(315, 350, 100, 80), UIColor.blackColor);
+        fx_oval(CGRectMake(585, 350, 100, 80), UIColor.blackColor);
+        fx_line(CGPointMake(430, 700), CGPointMake(570, 700), 12, green);
+    } else if (fx == FX_BLUSH) {
+        UIColor *pink = [UIColor colorWithRed:1 green:0.28 blue:0.48 alpha:0.42];
+        fx_oval(CGRectMake(180, 555, 250, 135), pink);
+        fx_oval(CGRectMake(570, 555, 250, 135), pink);
+        for (int i = 0; i < 3; i++) {
+            fx_heart(300 + i * 35, 535 - i * 24, 22, red);
+            fx_heart(700 - i * 35, 535 - i * 24, 22, red);
+        }
+    } else if (fx == FX_STARS) {
+        UIColor *gold = [UIColor colorWithRed:1 green:0.82 blue:0.12 alpha:0.95];
+        for (int side = 0; side < 2; side++) {
+            CGFloat cx = side ? 650 : 350;
+            CGPoint star[10];
+            for (int i = 0; i < 10; i++) {
+                CGFloat a = (CGFloat)i * (CGFloat)M_PI / 5.0 - (CGFloat)M_PI_2;
+                CGFloat r = (i % 2 == 0) ? 88 : 38;
+                star[i] = CGPointMake(cx + cos(a) * r, 420 + sin(a) * r);
+            }
+            fx_poly(star, 10, gold);
+        }
     }
 }
 
@@ -1934,15 +1980,22 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
 
 - (CIImage *)applyFilter:(CIImage *)img {
     int f = self.filter;
-    if (f <= 0 || f >= 8) return img;
+    if (f <= 0 || f >= 16) return img;
     CIFilter *flt = [CIFilter filterWithName:kCamFilters[f]];
-    if (!flt) return nil;
+    if (!flt) return img;
     CGRect e = img.extent;
-    CIImage *src = (f == 5) ? [img imageByClampingToExtent] : img;
+    BOOL needsClamp = (f == 5 || f == 14);
+    CIImage *src = needsClamp ? [img imageByClampingToExtent] : img;
     [flt setValue:src forKey:kCIInputImageKey];
     if (f == 4) [flt setValue:@(MAX(8.0, e.size.width / 60.0)) forKey:kCIInputScaleKey];
     if (f == 5) [flt setValue:@(MAX(8.0, e.size.width / 50.0)) forKey:kCIInputRadiusKey];
-    return [flt.outputImage imageByCroppingToRect:e];
+    if (f == 14) {
+        [flt setValue:@(MAX(1.0, e.size.width / 3.0)) forKey:kCIInputRadiusKey];
+        [flt setValue:@0.65 forKey:kCIInputIntensityKey];
+    }
+    if (f == 15) [flt setValue:@4 forKey:@"inputLevels"];
+    CIImage *out = flt.outputImage;
+    return out ? [out imageByCroppingToRect:e] : img;
 }
 
 - (CMSampleBufferRef)copyProcessed:(CMSampleBufferRef)input {
@@ -2460,7 +2513,7 @@ static void echo_cam_install(void) {
 
     y = [self addHeader:@"🎨 فلاتر الألوان" to:tab y:y];
     NSMutableArray *btns = [NSMutableArray array];
-    for (NSInteger i = 0; i < 8; i++) {
+    for (NSInteger i = 0; i < 16; i++) {
         UIButton *b = [self makeButton:kCamFilterNames[i]
                                  frame:CGRectMake(16 + (i % 3) * (bw + 8), y + (i / 3) * 40, bw, 32)
                                    tag:i action:@selector(camFilterTapped:)];
@@ -2468,7 +2521,7 @@ static void echo_cam_install(void) {
         [btns addObject:b];
     }
     self.camFilterBtns = btns;
-    y += 3 * 40 + 6;
+    y += ((16 + 2) / 3) * 40 + 6;
 
     y = [self addHeader:@"🖼️ صورة أو فيديو بدل الكام" to:tab y:y];
     CGFloat hw = (w - 8) / 2.0;
