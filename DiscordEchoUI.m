@@ -443,7 +443,6 @@ static NSString *EchoTime(float s) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSArray *savedURLs = [defaults arrayForKey:@"DiscordEchoBrowserTabsURLs"];
     
-    // نقرأ التبويب الأخير قبل ما نفتح النوافذ (الفتح يغيّر المحدد)
     NSInteger savedIndex = [defaults integerForKey:kLastTabKey];
     self.restoring = YES;
 
@@ -467,7 +466,6 @@ static NSString *EchoTime(float s) {
     [self selectTab:savedIndex];
     [self saveCurrentTabsState];
 
-    // نحفظ كمان لما يروح التطبيق للخلفية
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(saveCurrentTabsState)
                                                  name:UIApplicationWillResignActiveNotification
@@ -483,7 +481,7 @@ static NSString *EchoTime(float s) {
 }
 
 - (void)saveCurrentTabsState {
-    if (self.restoring) return; // لا نكتب فوق المحفوظ أثناء الاسترجاع
+    if (self.restoring) return;
     NSMutableArray *urlsArray = [NSMutableArray array];
     for (WKWebView *w in self.tabs) {
         if (w.URL && w.URL.absoluteString.length > 0) {
@@ -497,7 +495,6 @@ static NSString *EchoTime(float s) {
     [d setInteger:self.cur forKey:kLastTabKey];
 }
 
-// يتغير الرابط في يوتيوب بدون تحميل صفحة جديدة، فنراقبه مباشرة
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object
                         change:(NSDictionary *)change context:(void *)context {
     if (![keyPath isEqualToString:@"URL"]) {
@@ -509,7 +506,6 @@ static NSString *EchoTime(float s) {
     [self saveCurrentTabsState];
 }
 
-// لو النظام قفل صفحة بالخلفية عشان الذاكرة، نرجعها
 - (void)webViewWebContentProcessDidTerminate:(WKWebView *)wv {
     [wv reload];
 }
@@ -541,7 +537,7 @@ static NSString *EchoTime(float s) {
     [self stopAuto];
     self.pendingVideo = video.absoluteString;
     self.pendingWeb = self.web;
-    UIPasteboard.generalPasteboard.string = self.pendingVideo; // احتياط للصق اليدوي
+    UIPasteboard.generalPasteboard.string = self.pendingVideo;
     self.status.text = @"⏳ أفتح موقع التحويل وأحط الرابط…";
     [self loadText:kConverterURL];
 }
@@ -560,7 +556,6 @@ static NSString *EchoTime(float s) {
     [self runAuto:video gen:self.autoGen tries:0];
 }
 
-// كل ثانية يشوف وش الخطوة الجاية: تنزيل ← صوت ← MP3 320 ← تحميل
 - (void)runAuto:(NSString *)video gen:(NSUInteger)gen tries:(int)tries {
     if (gen != self.autoGen || !self.autoWeb) return;
     NSString *host = [NSURL URLWithString:kConverterURL].host;
@@ -575,10 +570,8 @@ static NSString *EchoTime(float s) {
             [ws runAuto:video gen:gen tries:tries + 1];
         });
     };
-    // ما نشغّل السكربت إلا على موقع التحويل
     if (self.autoWeb.loading || ![self.autoWeb.URL.host isEqualToString:host]) { again(); return; }
 
-    // نمرر الرابط كـ JSON عشان ما يكسر السكربت
     NSData *data = [NSJSONSerialization dataWithJSONObject:@[video] options:0 error:nil];
     NSString *arg = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     NSString *js = [NSString stringWithFormat:@"%@(%@[0],%ld)", [self autoScript], arg, (long)self.autoStep];
@@ -662,7 +655,6 @@ static NSString *EchoTime(float s) {
 
 #pragma mark - إيقاف الصوت عند الخروج من المتصفح
 
-// لما ترجع للتطبيق والمتصفح مفتوح، نسمح بالتشغيل من جديد
 - (void)resumeAllowed {
     if (!self.viewIfLoaded.window) return;
     if (@available(iOS 15.0, *)) {
@@ -670,7 +662,6 @@ static NSString *EchoTime(float s) {
     }
 }
 
-// يوقف الفيديو والصوت بدون ما يعيد تحميل الصفحة
 - (void)silenceTabs {
     for (WKWebView *w in self.tabs) {
         if (@available(iOS 15.0, *)) {
@@ -694,7 +685,6 @@ static NSString *EchoTime(float s) {
     [super viewDidDisappear:animated];
     if (!self.presentingViewController || self.isBeingDismissed) [self silenceTabs];
 }
-
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
@@ -720,7 +710,6 @@ static NSString *EchoTime(float s) {
 
     if (self.isSplitScreen && self.tabs.count >= 2) {
         CGFloat halfW = b.size.width / 2.0;
-        // اليسار النافذة الأولى، واليمين الثانية أو أي نافذة إضافية تختارها
         NSInteger right = self.cur >= 2 ? self.cur : 1;
         for (NSInteger i = 0; i < (NSInteger)self.tabs.count; i++) {
             self.tabs[i].hidden = (i != 0 && i != right);
@@ -822,7 +811,6 @@ static NSString *EchoTime(float s) {
 
 - (WKWebView *)webView:(WKWebView *)wv createWebViewWithConfiguration:(WKWebViewConfiguration *)cfg
    forNavigationAction:(WKNavigationAction *)a windowFeatures:(WKWindowFeatures *)f {
-    // أثناء التنزيل التلقائي نتجاهل نوافذ الإعلانات المنبثقة
     if (wv == self.autoWeb && self.autoStep < 3 &&
         ![a.request.URL.host isEqualToString:[NSURL URLWithString:kConverterURL].host]) return nil;
     if (a.targetFrame == nil || !a.targetFrame.isMainFrame) {
@@ -1018,7 +1006,6 @@ static void fx_line(CGPoint a, CGPoint b, CGFloat width, UIColor *c) {
     [p stroke];
 }
 
-// حلقة: شكل بيضاوي فيه فتحات للعيون والفم
 static void fx_mask(UIColor *c) {
     UIBezierPath *p = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(170, 150, 660, 790)];
     [p appendPath:[UIBezierPath bezierPathWithOvalInRect:CGRectMake(285, 365, 130, 110)]];
@@ -1040,7 +1027,6 @@ static void fx_heart(CGFloat cx, CGFloat cy, CGFloat s, UIColor *c) {
     [p fill];
 }
 
-// لوحة 1000×1000: العينين عند (350,420) و (650,420) والفم عند (500,720)
 static void fx_draw(int fx) {
     UIColor *black = UIColor.blackColor, *white = UIColor.whiteColor, *red = [UIColor colorWithRed:0.9 green:0.1 blue:0.15 alpha:1];
     if (fx == FX_CAT) {
@@ -1154,7 +1140,6 @@ static CGPoint fx_mix(CGPoint a, CGPoint b, CGFloat k) {
     return CGPointMake(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k);
 }
 
-// يطلع أماكن العينين والفم لأكبر وجه في الصورة
 static BOOL fx_find_face(CIImage *img, EchoFace *out) {
     VNDetectFaceLandmarksRequest *req = [[VNDetectFaceLandmarksRequest alloc] init];
     CGSize size = img.extent.size;
@@ -1182,13 +1167,11 @@ static void fx_measure(EchoFace *f) {
     f->eyes = fx_mix(f->eyeA, f->eyeB, 0.5);
     f->eyeDist = hypot(f->eyeB.x - f->eyeA.x, f->eyeB.y - f->eyeA.y);
     f->mouthDist = hypot(f->mouth.x - f->eyes.x, f->mouth.y - f->eyes.y);
-    // الاتجاه من الفم للعينين، عشان القناع يميل مع الراس
     f->angle = atan2(f->eyes.y - f->mouth.y, f->eyes.x - f->mouth.x) - M_PI_2;
 }
 
 #pragma mark - مكياج يلتصق بالوجه
 
-// مسار ناعم مقفل يمر على النقاط
 static void paint_smooth(CGContextRef c, const CGPoint *p, int n) {
     if (n < 3) return;
     CGContextMoveToPoint(c, (p[n - 1].x + p[0].x) / 2, (p[n - 1].y + p[0].y) / 2);
@@ -1199,7 +1182,6 @@ static void paint_smooth(CGContextRef c, const CGPoint *p, int n) {
     CGContextClosePath(c);
 }
 
-// يحول نقطة من الصورة لإحداثيات الوجه: x يمين، y فوق، ووحدتها المسافة بين العينين
 static CGPoint paint_local(const EchoFace *f, CGPoint p) {
     CGFloat dx = p.x - f->eyes.x, dy = p.y - f->eyes.y;
     CGFloat c = cos(f->angle), s = sin(f->angle), d = MAX(1.0, f->eyeDist);
@@ -1214,15 +1196,13 @@ static void paint_eyes_path(CGContextRef c, const EchoFace *f, const CGPoint *ey
     paint_smooth(c, q, n);
 }
 
-// layer: 0 = الأساس الأبيض، 1 = الرسم الأسود
 static void paint_skull(CGContextRef c, const EchoFace *f, int layer) {
     CGPoint eyeA = paint_local(f, f->eyeA), eyeB = paint_local(f, f->eyeB), mouth = paint_local(f, f->mouth);
-    CGFloat md = MAX(0.7, -mouth.y); // طول الوجه من العينين للفم
+    CGFloat md = MAX(0.7, -mouth.y);
     CGContextSetGrayFillColor(c, 1, 1);
     CGContextSetGrayStrokeColor(c, 1, 1);
 
     if (layer == 0) {
-        // الفك من نقاط وجهك الحقيقية، والجبهة نكملها بقوس
         CGPoint q[MAX_PTS + 8];
         int n = 0, count = f->nContour;
         if (count < 5) return;
@@ -1240,7 +1220,6 @@ static void paint_skull(CGContextRef c, const EchoFace *f, int layer) {
         paint_smooth(c, q, n);
         CGContextFillPath(c);
     } else {
-        // محاجر العيون بحواف غير منتظمة
         static const CGFloat kR[12] = { 1.0, 0.95, 1.08, 1.02, 0.94, 1.0, 1.04, 0.93, 1.16, 0.96, 1.03, 0.95 };
         CGPoint eyes[2] = { eyeA, eyeB };
         for (int e = 0; e < 2; e++) {
@@ -1252,7 +1231,6 @@ static void paint_skull(CGContextRef c, const EchoFace *f, int layer) {
             paint_smooth(c, q, 12);
             CGContextFillPath(c);
         }
-        // الأنف: مثلثين على شكل قلب مقلوب
         CGFloat ny = -md * 0.62;
         CGContextMoveToPoint(c, 0, ny + 0.2);
         CGContextAddCurveToPoint(c, 0.08, ny + 0.08, 0.27, ny - 0.04, 0.17, ny - 0.13);
@@ -1260,7 +1238,6 @@ static void paint_skull(CGContextRef c, const EchoFace *f, int layer) {
         CGContextAddQuadCurveToPoint(c, -0.07, ny - 0.17, -0.17, ny - 0.13);
         CGContextAddCurveToPoint(c, -0.27, ny - 0.04, -0.08, ny + 0.08, 0, ny + 0.2);
         CGContextFillPath(c);
-        // الفم المخيط: خط يمر على فمك ويمتد للخدين
         CGFloat half = 0.82, lift = 0.24;
         CGContextSetLineCap(c, kCGLineCapRound);
         CGContextSetLineWidth(c, 0.045);
@@ -1278,7 +1255,6 @@ static void paint_skull(CGContextRef c, const EchoFace *f, int layer) {
             CGContextStrokePath(c);
         }
     }
-    // نفرغ مكان العيون عشان تطلع عيونك الحقيقية
     CGContextSetGrayFillColor(c, 0, 1);
     paint_eyes_path(c, f, f->eyePtsA, f->nEyeA);
     CGContextFillPath(c);
@@ -1286,7 +1262,6 @@ static void paint_skull(CGContextRef c, const EchoFace *f, int layer) {
     CGContextFillPath(c);
 }
 
-// قناع رمادي بنفس إحداثيات الصورة، بدقة مخففة عشان السرعة
 static CIImage *paint_mask(const EchoFace *f, CGSize size, int layer) {
     CGFloat k = MIN(1.0, 640.0 / MAX(size.width, size.height));
     size_t w = MAX(1, (size_t)(size.width * k)), h = MAX(1, (size_t)(size.height * k));
@@ -1307,14 +1282,12 @@ static CIImage *paint_mask(const EchoFace *f, CGSize size, int layer) {
     CIImage *m = [CIImage imageWithCGImage:cg];
     CGImageRelease(cg);
     m = [m imageByApplyingTransform:CGAffineTransformMakeScale(size.width / w, size.height / h)];
-    // تنعيم الحواف عشان تبان كأنها دهان
     CGFloat soft = f->eyeDist * (layer == 0 ? 0.045 : 0.012);
     return [[[m imageByClampingToExtent] imageByApplyingFilter:@"CIGaussianBlur"
                                            withInputParameters:@{ kCIInputRadiusKey: @(soft) }]
             imageByCroppingToRect:CGRectMake(0, 0, size.width, size.height)];
 }
 
-// نلون نسخة من صورتك نفسها، فيبقى ظل وملمس البشرة تحت الدهان
 static CIImage *paint_tone(CIImage *img, CGFloat gain, CGFloat r, CGFloat g, CGFloat b) {
     CIImage *mono = [img imageByApplyingFilter:@"CIColorControls" withInputParameters:@{ kCIInputSaturationKey: @0 }];
     return [mono imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{
@@ -1340,18 +1313,17 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
 
 @interface EchoCam : NSObject
 @property (atomic) int effect;
-@property (atomic) int liveFlip;   // عكس الكاميرا الحقيقية: 0 طافي، 1، 2
+@property (atomic) int liveFlip;
 @property (atomic) BOOL faceSeen;
-// محرك تغيير الملامح: كل قيمة من -100 إلى 100
 - (void)setShape:(int)index value:(int)v;
 - (BOOL)hasShape;
 - (void)useCustomMask:(CIImage *)mask;
 - (BOOL)hasCustomMask;
 @property (atomic) int mode;
 @property (atomic) int filter;
-@property (atomic) int turns;      // تدوير الصورة/الفيديو: 0..3
+@property (atomic) int turns;
 @property (atomic) BOOL mirror;
-@property (atomic) unsigned frames; // عدد الإطارات اللي مرت علينا
+@property (atomic) unsigned frames;
 + (instancetype)shared;
 - (void)useImage:(CIImage *)image;
 - (BOOL)useVideo:(NSURL *)url;
@@ -1391,7 +1363,6 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     }
 }
 
-// يطبق الأشرطة كلها مع بعض على ملامحك
 - (CIImage *)reshape:(CIImage *)img face:(EchoFace)face {
     CGFloat d = face.eyeDist;
     CGPoint nose = fx_mix(face.eyes, face.mouth, 0.6);
@@ -1420,7 +1391,56 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     @synchronized (self) { return _fxArt[FX_CUSTOM] != nil; }
 }
 
-// نبحث عن الوجه. إطارات الكاميرا ممكن تكون مايلة، فنجرب الاتجاهات لين نلقاه
+// قناع مخصص يلتصق بالوجه، يطابق ميلانه وحجمه، ويفرّغ العيون بحواف ناعمة
+- (CIImage *)customFaceMaskForSize:(CGSize)size face:(const EchoFace *)face {
+    CGFloat k = MIN(1.0, 640.0 / MAX(size.width, size.height));
+    size_t w = MAX(1, (size_t)(size.width * k));
+    size_t h = MAX(1, (size_t)(size.height * k));
+
+    CGColorSpaceRef gray = CGColorSpaceCreateDeviceGray();
+    CGContextRef c = CGBitmapContextCreate(NULL, w, h, 8, 0, gray, (CGBitmapInfo)kCGImageAlphaNone);
+    CGColorSpaceRelease(gray);
+    if (!c) return nil;
+
+    CGContextSetGrayFillColor(c, 0, 1);
+    CGContextFillRect(c, CGRectMake(0, 0, w, h));
+
+    CGContextScaleCTM(c, k, k);
+    CGContextTranslateCTM(c, face->eyes.x, face->eyes.y);
+    CGContextRotateCTM(c, face->angle);
+    CGContextScaleCTM(c, face->eyeDist, face->eyeDist);
+
+    CGPoint mouthLocal = paint_local(face, face->mouth);
+    CGFloat centerY = mouthLocal.y * 0.52;
+    CGFloat radiusX = 1.05;
+    CGFloat radiusY = MAX(1.05, fabs(mouthLocal.y) * 1.38);
+
+    CGContextSetGrayFillColor(c, 1, 1);
+    CGContextFillEllipseInRect(c, CGRectMake(-radiusX, centerY - radiusY, radiusX * 2.0, radiusY * 2.0));
+
+    // تفريغ العينين عشان تبان عيونك الحقيقية
+    CGContextSetGrayFillColor(c, 0, 1);
+    paint_eyes_path(c, face, face->eyePtsA, face->nEyeA);
+    CGContextFillPath(c);
+    paint_eyes_path(c, face, face->eyePtsB, face->nEyeB);
+    CGContextFillPath(c);
+
+    CGImageRef cg = CGBitmapContextCreateImage(c);
+    CGContextRelease(c);
+    if (!cg) return nil;
+
+    CIImage *m = [CIImage imageWithCGImage:cg];
+    CGImageRelease(cg);
+
+    m = [m imageByApplyingTransform:CGAffineTransformMakeScale(size.width / w, size.height / h)];
+    CGFloat soft = MAX(4.0, face->eyeDist * 0.055);
+
+    return [[[m imageByClampingToExtent]
+             imageByApplyingFilter:@"CIGaussianBlur"
+               withInputParameters:@{ kCIInputRadiusKey: @(soft) }]
+            imageByCroppingToRect:CGRectMake(0, 0, size.width, size.height)];
+}
+
 - (CIImage *)applyEffect:(CIImage *)img {
     int fx = self.effect;
     if (fx < FX_NONE || fx >= FX_COUNT) fx = FX_NONE;
@@ -1433,11 +1453,10 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     up = [up imageByApplyingTransform:CGAffineTransformMakeTranslation(-up.extent.origin.x, -up.extent.origin.y)];
 
     CFTimeInterval now = CACurrentMediaTime();
-    { // الكشف على كل إطار عشان القناع يطابق نفس الصورة
+    {
         EchoFace found;
         if (fx_find_face(up, &found)) {
             if (_haveFace) {
-                // تنعيم ذكي: وأنت ثابت ينعّم الرجفة، ووأنت تتحرك يلحقك على طول
                 CGPoint was = fx_mix(_face.eyeA, _face.eyeB, 0.5), is = fx_mix(found.eyeA, found.eyeB, 0.5);
                 CGFloat move = hypot(is.x - was.x, is.y - was.y);
                 CGFloat k = MIN(1.0, 0.3 + move / MAX(1.0, _face.eyeDist * 0.1));
@@ -1507,13 +1526,39 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
             kCIInputBackgroundImageKey: img, kCIInputMaskImageKey: grad.outputImage }] imageByCroppingToRect:img.extent];
     }
 
-    if (!_fxArt[fx] && fx != FX_CUSTOM) {
+    if (fx == FX_CUSTOM) {
+        CIImage *custom = _fxArt[FX_CUSTOM];
+        if (!custom) return img;
+
+        CGFloat scaleX = d / 300.0;
+        CGFloat scaleY = MAX(face.mouthDist, d * 0.75) / 300.0;
+
+        CGAffineTransform t = CGAffineTransformMakeTranslation(-500, -580);
+        t = CGAffineTransformConcat(t, CGAffineTransformMakeScale(scaleX, scaleY));
+        t = CGAffineTransformConcat(t, CGAffineTransformMakeRotation(face.angle));
+        t = CGAffineTransformConcat(t, CGAffineTransformMakeTranslation(face.eyes.x, face.eyes.y));
+
+        CIImage *warpedCustom = [[custom imageByApplyingTransform:t] imageByCroppingToRect:img.extent];
+        CIImage *faceMask = [self customFaceMaskForSize:img.extent.size face:&face];
+
+        if (faceMask) {
+            CIImage *maskedCustom = [warpedCustom imageByApplyingFilter:@"CIBlendWithMask"
+                withInputParameters:@{
+                    kCIInputBackgroundImageKey: [CIImage imageWithColor:[CIColor clearColor]],
+                    kCIInputMaskImageKey: faceMask
+                }];
+            return [[maskedCustom imageByCompositingOverImage:img] imageByCroppingToRect:img.extent];
+        }
+
+        return [[warpedCustom imageByCompositingOverImage:img] imageByCroppingToRect:img.extent];
+    }
+
+    if (!_fxArt[fx]) {
         UIImage *art = fx_render(^{ fx_draw(fx); });
         if (art.CGImage) _fxArt[fx] = [CIImage imageWithCGImage:art.CGImage];
     }
     CIImage *art = _fxArt[fx];
     if (!art) return img;
-    // نركّب اللوحة: عينين اللوحة على عينينك، والمقاس والميلان حسب وجهك
     CGAffineTransform t = CGAffineTransformMakeTranslation(-500, -580);
     t = CGAffineTransformConcat(t, CGAffineTransformMakeScale(d / 300.0, MAX(face.mouthDist, d * 0.7) / 300.0));
     t = CGAffineTransformConcat(t, CGAffineTransformMakeRotation(face.angle));
@@ -1578,7 +1623,6 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
         _asset = [AVURLAsset URLAssetWithURL:url options:nil];
         _still = nil;
         BOOL ok = [self startReader];
-        // حتى لو فشل نبقى على وضع الفيديو (شاشة سوداء) عشان ما تطلع الكاميرا الحقيقية فجأة
         self.mode = CAM_VIDEO;
         return ok;
     }
@@ -1592,7 +1636,6 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     return o == 1 ? img : [img imageByApplyingOrientation:o];
 }
 
-// يرجّع إطار الفيديو المناسب للوقت الحالي، ويعيد من البداية إذا خلص
 - (CIImage *)currentVideoFrame {
     if (!_reader) return _videoFrame;
     double elapsed = CACurrentMediaTime() - _videoStart;
@@ -1616,7 +1659,6 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     return _videoFrame;
 }
 
-// يحط الصورة كاملة داخل مقاس الكاميرا مع خلفية سوداء
 - (CIImage *)fit:(CIImage *)img into:(CGSize)size {
     CGRect black = CGRectMake(0, 0, size.width, size.height);
     CIImage *bg = [[CIImage imageWithColor:[CIColor colorWithRed:0 green:0 blue:0]] imageByCroppingToRect:black];
@@ -1647,7 +1689,6 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     return [flt.outputImage imageByCroppingToRect:e];
 }
 
-// يرجّع NULL إذا ما قدر يعالج الإطار
 - (CMSampleBufferRef)copyProcessed:(CMSampleBufferRef)input {
     @synchronized (self) {
         CVImageBufferRef src = CMSampleBufferGetImageBuffer(input);
@@ -1700,7 +1741,6 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
 
 typedef void (*EchoFrameIMP)(id, SEL, AVCaptureOutput *, CMSampleBufferRef, AVCaptureConnection *);
 
-// نعترض دالة استقبال الإطارات في الكلاس اللي يستلم الكاميرا
 static void echo_cam_hook_class(Class cls) {
     static NSMutableSet *done;
     static NSMutableSet *ours;
@@ -1722,7 +1762,6 @@ static void echo_cam_hook_class(Class cls) {
             if (cam.mode == CAM_LIVE && cam.filter == 0 && cam.effect == 0 && cam.liveFlip == 0 && ![cam hasShape]) { orig(me, sel, output, sb, conn); return; }
             @autoreleasepool {
                 CMSampleBufferRef out = [cam copyProcessed:sb];
-                // لو فشلت المعالجة نسقط الإطار، ما نرسل الكاميرا الأصلية
                 if (out) {
                     orig(me, sel, output, out, conn);
                     CFRelease(out);
@@ -2194,7 +2233,7 @@ static void echo_cam_install(void) {
 
 - (void)shapeChanged:(UISlider *)sl {
     int v = (int)lroundf(sl.value);
-    if (abs(v) < 6) v = 0; // منطقة وسط عشان يسهل ترجع للصفر
+    if (abs(v) < 6) v = 0;
     [[EchoCam shared] setShape:(int)sl.tag value:v];
     self.shapeLabels[sl.tag].text = [NSString stringWithFormat:@"%@: %d", kShapeNames[sl.tag], v];
 }
@@ -2221,7 +2260,6 @@ static void echo_cam_install(void) {
 
 - (void)camPickMask {
     self.pickingMask = YES;
-    // من الملفات عشان تبقى خلفية PNG شفافة
     [self openCamFiles];
 }
 
@@ -2306,7 +2344,6 @@ static void echo_cam_install(void) {
     __weak EchoController *ws = self;
     [item loadFileRepresentationForTypeIdentifier:(video ? @"public.movie" : @"public.image")
                                 completionHandler:^(NSURL *url, NSError *error) {
-        // الملف المؤقت ينحذف بعد هذا البلوك، فننسخه الحين
         NSURL *copy = nil;
         if (url) {
             NSString *name = [NSString stringWithFormat:@"echo_cam_%u.%@", arc4random(), url.pathExtension];
@@ -2341,7 +2378,6 @@ static void echo_cam_install(void) {
     } else {
         UIImage *img = [UIImage imageWithContentsOfFile:url.path];
         if (!img || img.size.width < 1 || img.size.height < 1) { self.camSource.text = @"❌ ما قدرت أقرأ الصورة"; return; }
-        // نعيد رسمها: يضبط اتجاهها ويصغرها لو كانت كبيرة
         CGFloat k = MIN(1.0, 1920.0 / MAX(img.size.width, img.size.height));
         CGSize size = CGSizeMake(floor(img.size.width * k), floor(img.size.height * k));
         UIGraphicsImageRendererFormat *fmt = [UIGraphicsImageRendererFormat defaultFormat];
@@ -2531,7 +2567,7 @@ static void echo_cam_install(void) {
                 return;
             }
             int loaded = DiscordEcho_MusicLoad(buf, count);
-            if (loaded && cleanup) DiscordEcho_MusicPlay(1); // ملف من المتصفح: يشتغل على طول
+            if (loaded && cleanup) DiscordEcho_MusicPlay(1);
             NSString *t = [NSString stringWithFormat:@"🎵 %@", name];
             if (truncated) t = [t stringByAppendingString:@" (أول 8 دقايق بس)"];
             self.songLabel.text = t;
@@ -2700,7 +2736,6 @@ static void echo_ui_init(void) {
                      queue:[NSOperationQueue mainQueue]
                 usingBlock:^(NSNotification *n) {
         NSUInteger reason = [n.userInfo[AVAudioSessionRouteChangeReasonKey] unsignedIntegerValue];
-        // هذا السبب ممكن يتكرر بسبب محركنا نفسه، فنتجاهله عشان ما ندخل في حلقة
         if (reason == AVAudioSessionRouteChangeReasonRouteConfigurationChange) return;
         DiscordEcho_ResetAll();
         if (echo_mon_wanted()) echo_monitor_restart_later();
