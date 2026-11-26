@@ -1185,10 +1185,16 @@ static void fx_measure(EchoFace *f) {
     f->angle = atan2(f->eyes.y - f->mouth.y, f->eyes.x - f->mouth.x) - M_PI_2;
 }
 
+enum { SHAPE_EYES = 0, SHAPE_MOUTH, SHAPE_NOSE, SHAPE_CHIN, SHAPE_FACE, SHAPE_COUNT };
+static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم", @"الأنف", @"الذقن", @"الوجه (نحيف ↔ منفوخ)" };
+
 @interface EchoCam : NSObject
 @property (atomic) int effect;
 @property (atomic) int liveFlip;   // عكس الكاميرا الحقيقية: 0 طافي، 1، 2
 @property (atomic) BOOL faceSeen;
+// محرك تغيير الملامح: كل قيمة من -100 إلى 100
+- (void)setShape:(int)index value:(int)v;
+- (BOOL)hasShape;
 - (void)useCustomMask:(CIImage *)mask;
 - (BOOL)hasCustomMask;
 @property (atomic) int mode;
@@ -1217,10 +1223,44 @@ static void fx_measure(EchoFace *f) {
     size_t _poolW, _poolH;
     OSType _poolType;
     CIImage *_fxArt[FX_COUNT];
+    int _shape[SHAPE_COUNT];
     EchoFace _face;
     BOOL _haveFace;
     CFTimeInterval _faceTime;
     int _searchTurn;
+}
+
+- (void)setShape:(int)index value:(int)v {
+    if (index < 0 || index >= SHAPE_COUNT) return;
+    @synchronized (self) { _shape[index] = v; }
+}
+- (BOOL)hasShape {
+    @synchronized (self) {
+        for (int i = 0; i < SHAPE_COUNT; i++) if (_shape[i]) return YES;
+        return NO;
+    }
+}
+
+// يطبق الأشرطة كلها مع بعض على ملامحك
+- (CIImage *)reshape:(CIImage *)img face:(EchoFace)face {
+    CGFloat d = face.eyeDist;
+    CGPoint nose = fx_mix(face.eyes, face.mouth, 0.6);
+    CGPoint chin = fx_mix(face.eyes, face.mouth, 1.65);
+    CGPoint middle = fx_mix(face.eyes, face.mouth, 0.5);
+    CGFloat v;
+    if ((v = _shape[SHAPE_FACE] / 100.0) != 0)
+        img = [self warp:img name:@"CIBumpDistortion" at:middle radius:d * 1.9 scale:v * (v > 0 ? 0.4 : 0.25)];
+    if ((v = _shape[SHAPE_EYES] / 100.0) != 0) {
+        img = [self warp:img name:@"CIBumpDistortion" at:face.eyeA radius:d * 0.55 scale:v * 0.5];
+        img = [self warp:img name:@"CIBumpDistortion" at:face.eyeB radius:d * 0.55 scale:v * 0.5];
+    }
+    if ((v = _shape[SHAPE_NOSE] / 100.0) != 0)
+        img = [self warp:img name:@"CIBumpDistortion" at:nose radius:d * 0.55 scale:v * 0.45];
+    if ((v = _shape[SHAPE_MOUTH] / 100.0) != 0)
+        img = [self warp:img name:@"CIBumpDistortion" at:face.mouth radius:d * 0.75 scale:v * 0.45];
+    if ((v = _shape[SHAPE_CHIN] / 100.0) != 0)
+        img = [self warp:img name:@"CIBumpDistortion" at:chin radius:d * 0.85 scale:v * 0.4];
+    return img;
 }
 
 - (void)useCustomMask:(CIImage *)mask {
@@ -1233,7 +1273,8 @@ static void fx_measure(EchoFace *f) {
 // نبحث عن الوجه. إطارات الكاميرا ممكن تكون مايلة، فنجرب الاتجاهات لين نلقاه
 - (CIImage *)applyEffect:(CIImage *)img {
     int fx = self.effect;
-    if (fx <= FX_NONE || fx >= FX_COUNT) { _haveFace = NO; self.faceSeen = NO; return img; }
+    if (fx < FX_NONE || fx >= FX_COUNT) fx = FX_NONE;
+    if (fx == FX_NONE && ![self hasShape]) { _haveFace = NO; self.faceSeen = NO; return img; }
 
     static const int kTry[4] = { 1, 6, 8, 3 };
     int o = kTry[_searchTurn & 3];
@@ -1267,7 +1308,8 @@ static void fx_measure(EchoFace *f) {
     }
     self.faceSeen = YES;
 
-    CIImage *result = [self effect:fx on:up face:_face];
+    CIImage *result = [self reshape:up face:_face];
+    if (fx != FX_NONE) result = [self effect:fx on:result face:_face];
     if (o != 1) result = [result imageByApplyingOrientation:back];
     CGRect r = result.extent;
     return [result imageByApplyingTransform:CGAffineTransformMakeTranslation(-r.origin.x, -r.origin.y)];
@@ -1520,7 +1562,7 @@ static void echo_cam_hook_class(Class cls) {
             if (![output isKindOfClass:AVCaptureVideoDataOutput.class]) { orig(me, sel, output, sb, conn); return; }
             EchoCam *cam = [EchoCam shared];
             cam.frames = cam.frames + 1;
-            if (cam.mode == CAM_LIVE && cam.filter == 0 && cam.effect == 0 && cam.liveFlip == 0) { orig(me, sel, output, sb, conn); return; }
+            if (cam.mode == CAM_LIVE && cam.filter == 0 && cam.effect == 0 && cam.liveFlip == 0 && ![cam hasShape]) { orig(me, sel, output, sb, conn); return; }
             @autoreleasepool {
                 CMSampleBufferRef out = [cam copyProcessed:sb];
                 // لو فشلت المعالجة نسقط الإطار، ما نرسل الكاميرا الأصلية
@@ -1583,6 +1625,8 @@ static void echo_cam_install(void) {
 @property (nonatomic, strong) UILabel *camSource;
 @property (nonatomic, strong) NSArray<UIButton *> *camFilterBtns;
 @property (nonatomic, strong) NSArray<UIButton *> *camFxBtns;
+@property (nonatomic, strong) NSArray<UISlider *> *shapeSliders;
+@property (nonatomic, strong) NSArray<UILabel *> *shapeLabels;
 @property (nonatomic) BOOL pickingMask;
 @property (nonatomic, strong) NSURL *camFile;
 @property (nonatomic) unsigned lastCamFrames;
@@ -1926,6 +1970,25 @@ static void echo_cam_install(void) {
     [tab addSubview:[self makeButton:@"⇋ عكس الكاميرا: طافي" frame:CGRectMake(16, y, w, 36) tag:0 action:@selector(camLiveFlip:)]];
     y += 44;
 
+    y = [self addHeader:@"🧬 غيّر ملامحك" to:tab y:y];
+    NSMutableArray *sliders = [NSMutableArray array];
+    NSMutableArray *labels = [NSMutableArray array];
+    for (NSInteger i = 0; i < SHAPE_COUNT; i++) {
+        UILabel *l = [self makeLabelAt:CGRectMake(16, y, w, 20) size:13 bold:YES alpha:1];
+        l.text = [NSString stringWithFormat:@"%@: 0", kShapeNames[i]];
+        UISlider *sl = [self makeSliderAt:CGRectMake(16, y + 20, w, 28) min:-100 max:100 value:0 action:@selector(shapeChanged:)];
+        sl.tag = i;
+        [tab addSubview:l];
+        [tab addSubview:sl];
+        [labels addObject:l];
+        [sliders addObject:sl];
+        y += 52;
+    }
+    self.shapeSliders = sliders;
+    self.shapeLabels = labels;
+    [tab addSubview:[self makeButton:@"↺ رجّع ملامحي" frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(shapeReset)]];
+    y += 44;
+
     y = [self addHeader:@"🎭 مؤثرات الوجه" to:tab y:y];
     NSMutableArray *fxb = [NSMutableArray array];
     for (NSInteger i = 0; i < FX_COUNT; i++) {
@@ -1972,6 +2035,20 @@ static void echo_cam_install(void) {
     [self refreshCamStatus];
 }
 
+- (void)shapeChanged:(UISlider *)sl {
+    int v = (int)lroundf(sl.value);
+    if (abs(v) < 6) v = 0; // منطقة وسط عشان يسهل ترجع للصفر
+    [[EchoCam shared] setShape:(int)sl.tag value:v];
+    self.shapeLabels[sl.tag].text = [NSString stringWithFormat:@"%@: %d", kShapeNames[sl.tag], v];
+}
+
+- (void)shapeReset {
+    for (UISlider *sl in self.shapeSliders) {
+        sl.value = 0;
+        [self shapeChanged:sl];
+    }
+}
+
 - (void)camLiveFlip:(UIButton *)b {
     int v = ([EchoCam shared].liveFlip + 1) % 3;
     [EchoCam shared].liveFlip = v;
@@ -2011,7 +2088,7 @@ static void echo_cam_install(void) {
     BOOL live = c != 0 && (now - self.lastCamTime) < 0.8;
     self.camStatus.text = live ? @"🟢 ملتقط الكاميرا" : @"🔴 ما وصلني شي من الكاميرا";
     EchoCam *cam = [EchoCam shared];
-    if (live && cam.effect != FX_NONE && cam.mode == CAM_LIVE)
+    if (live && (cam.effect != FX_NONE || [cam hasShape]) && cam.mode == CAM_LIVE)
         self.camStatus.text = cam.faceSeen ? @"🟢 ملتقط الكاميرا · 🙂 لقيت وجهك" : @"🟢 ملتقط الكاميرا · 🔍 أدور على وجهك";
     self.camStatus.textColor = live ? [UIColor systemGreenColor] : [UIColor systemOrangeColor];
 }
