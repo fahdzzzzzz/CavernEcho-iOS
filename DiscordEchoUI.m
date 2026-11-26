@@ -1332,7 +1332,41 @@ static CIImage *paint_apply(CIImage *img, const EchoFace *f) {
     return [out imageByCroppingToRect:img.extent];
 }
 
-#pragma mark - دمج وجه من صورة مع مطابقة ملامح الوجه
+#pragma mark - تبديل وجه (Face Swap) بمطابقة ثلاث نقاط وتناسق ملامح الوجه
+
+static CGAffineTransform swap_affine_three_points(CGPoint s0, CGPoint s1, CGPoint s2,
+                                                CGPoint d0, CGPoint d1, CGPoint d2) {
+    // يحسب تحويل أفيني (إزاحة + تدوير + مقياس + انحراف خفيف) ينقل ثلاث نقاط من المصدر إلى ثلاث نقاط في الهدف
+    CGFloat dsx1 = s1.x - s0.x, dsy1 = s1.y - s0.y;
+    CGFloat dsx2 = s2.x - s0.x, dsy2 = s2.y - s0.y;
+    CGFloat det = dsx1 * dsy2 - dsy1 * dsx2;
+    if (fabs(det) < 1e-4) {
+        CGFloat sx = hypot(dsx1, dsy1);
+        CGFloat ddx1 = d1.x - d0.x, ddy1 = d1.y - d0.y;
+        CGFloat dx = hypot(ddx1, ddy1);
+        CGFloat sc = sx > 1.0 ? dx / sx : 1.0;
+        CGFloat ang = atan2(ddy1, ddx1) - atan2(dsy1, dsx1);
+        CGAffineTransform t = CGAffineTransformIdentity;
+        t = CGAffineTransformConcat(t, CGAffineTransformMakeTranslation(-s0.x, -s0.y));
+        t = CGAffineTransformConcat(t, CGAffineTransformMakeRotation(ang));
+        t = CGAffineTransformConcat(t, CGAffineTransformMakeScale(sc, sc));
+        t = CGAffineTransformConcat(t, CGAffineTransformMakeTranslation(d0.x, d0.y));
+        return t;
+    }
+
+    CGFloat ddx1 = d1.x - d0.x, ddy1 = d1.y - d0.y;
+    CGFloat ddx2 = d2.x - d0.x, ddy2 = d2.y - d0.y;
+
+    CGFloat a = (ddx1 * dsy2 - ddx2 * dsy1) / det;
+    CGFloat c = (dsx1 * ddx2 - dsx2 * ddx1) / det;
+    CGFloat b = (ddy1 * dsy2 - ddy2 * dsy1) / det;
+    CGFloat d = (dsx1 * ddy2 - dsx2 * ddy1) / det;
+
+    CGFloat tx = d0.x - (a * s0.x + c * s0.y);
+    CGFloat ty = d0.y - (b * s0.x + d * s0.y);
+
+    return CGAffineTransformMake(a, b, c, d, tx, ty);
+}
 
 static CIImage *swap_face_mask(const EchoFace *f, CGSize size) {
     CGFloat k = MIN(1.0, 640.0 / MAX(size.width, size.height));
@@ -1350,13 +1384,30 @@ static CIImage *swap_face_mask(const EchoFace *f, CGSize size) {
     CGContextRotateCTM(c, f->angle);
     CGContextScaleCTM(c, MAX(1.0, f->eyeDist), MAX(1.0, f->eyeDist));
 
-    CGPoint mouthLocal = paint_local(f, f->mouth);
-    CGFloat rx = 1.12;
-    CGFloat ry = MAX(1.15, fabs(mouthLocal.y) * 1.38);
-    CGFloat cy = mouthLocal.y * 0.45;
-
     CGContextSetGrayFillColor(c, 1, 1);
-    CGContextFillEllipseInRect(c, CGRectMake(-rx, cy - ry, rx * 2.0, ry * 2.0));
+    if (f->nContour >= 5) {
+        CGPoint q[MAX_PTS + 8];
+        int n = 0;
+        BOOL leftFirst = paint_local(f, f->contour[0]).x < paint_local(f, f->contour[f->nContour - 1]).x;
+        for (int i = 0; i < f->nContour; i++) {
+            CGPoint p = paint_local(f, f->contour[leftFirst ? i : f->nContour - 1 - i]);
+            q[n++] = CGPointMake(p.x * 0.94, p.y * 0.95);
+        }
+        CGFloat rx = q[n - 1].x, lx = q[0].x;
+        q[n++] = CGPointMake(rx * 0.92, 0.55);
+        q[n++] = CGPointMake(rx * 0.65, 0.88);
+        q[n++] = CGPointMake(0, 0.96);
+        q[n++] = CGPointMake(lx * 0.65, 0.88);
+        q[n++] = CGPointMake(lx * 0.92, 0.55);
+        paint_smooth(c, q, n);
+        CGContextFillPath(c);
+    } else {
+        CGPoint mouthLocal = paint_local(f, f->mouth);
+        CGFloat cy = mouthLocal.y * 0.42;
+        CGFloat rx = 0.96;
+        CGFloat ry = MAX(0.95, fabs(mouthLocal.y) * 1.15);
+        CGContextFillEllipseInRect(c, CGRectMake(-rx, cy - ry, rx * 2.0, ry * 2.0));
+    }
 
     CGImageRef cg = CGBitmapContextCreateImage(c);
     CGContextRelease(c);
@@ -1365,7 +1416,7 @@ static CIImage *swap_face_mask(const EchoFace *f, CGSize size) {
     CIImage *m = [CIImage imageWithCGImage:cg];
     CGImageRelease(cg);
     m = [m imageByApplyingTransform:CGAffineTransformMakeScale(size.width / w, size.height / h)];
-    CGFloat soft = MAX(5.0, f->eyeDist * 0.14);
+    CGFloat soft = MAX(5.0, f->eyeDist * 0.11);
     return [[[m imageByClampingToExtent]
              imageByApplyingFilter:@"CIGaussianBlur"
                withInputParameters:@{ kCIInputRadiusKey: @(soft) }]
@@ -1375,24 +1426,24 @@ static CIImage *swap_face_mask(const EchoFace *f, CGSize size) {
 static CIImage *swap_apply(CIImage *dstImg, CIImage *srcFaceImg, const EchoFace *srcFace, const EchoFace *dstFace) {
     if (!srcFaceImg || srcFace->eyeDist < 2.0 || dstFace->eyeDist < 2.0) return dstImg;
 
-    // مواءمة وجه المصدر: نضع مركز عيني المصدر عند الأصل، نلفه بزاوية المصدر، ثم نطبقه على زاوية ومقياس ومكان عيني الهدف
-    CGFloat scaleX = dstFace->eyeDist / srcFace->eyeDist;
-    CGFloat srcMouthSpan = MAX(1.0, srcFace->mouthDist);
-    CGFloat dstMouthSpan = MAX(1.0, dstFace->mouthDist);
-    CGFloat scaleY = MAX(0.75, MIN(1.35, (dstMouthSpan / srcMouthSpan) * 0.5 + scaleX * 0.5));
+    CGAffineTransform t = swap_affine_three_points(
+        srcFace->eyeA, srcFace->eyeB, srcFace->mouth,
+        dstFace->eyeA, dstFace->eyeB, dstFace->mouth
+    );
 
-    CGAffineTransform t = CGAffineTransformIdentity;
-    t = CGAffineTransformConcat(t, CGAffineTransformMakeTranslation(-srcFace->eyes.x, -srcFace->eyes.y));
-    t = CGAffineTransformConcat(t, CGAffineTransformMakeRotation(-srcFace->angle));
-    t = CGAffineTransformConcat(t, CGAffineTransformMakeScale(scaleX, scaleY));
-    t = CGAffineTransformConcat(t, CGAffineTransformMakeRotation(dstFace->angle));
-    t = CGAffineTransformConcat(t, CGAffineTransformMakeTranslation(dstFace->eyes.x, dstFace->eyes.y));
+    CIImage *warpedSrc = [[srcFaceImg imageByApplyingTransform:t] imageByCroppingToRect:dstImg.extent];
+    // مواءمة خفيفة للتباين والسطوع لتقريب نبرة الوجه المصدر من وجه الهدف
+    warpedSrc = [warpedSrc imageByApplyingFilter:@"CIColorControls"
+                             withInputParameters:@{
+                                 kCIInputSaturationKey: @0.96,
+                                 kCIInputContrastKey: @1.04,
+                                 kCIInputBrightnessKey: @0.01
+                             }];
 
-    CIImage *alignedSrc = [[srcFaceImg imageByApplyingTransform:t] imageByCroppingToRect:dstImg.extent];
     CIImage *mask = swap_face_mask(dstFace, dstImg.extent.size);
     if (!mask) return dstImg;
 
-    return [[alignedSrc imageByApplyingFilter:@"CIBlendWithMask"
+    return [[warpedSrc imageByApplyingFilter:@"CIBlendWithMask"
                           withInputParameters:@{
                               kCIInputBackgroundImageKey: dstImg,
                               kCIInputMaskImageKey: mask
