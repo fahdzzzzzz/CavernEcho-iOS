@@ -571,20 +571,15 @@ static int echo_enabled(void) {
 }
 
 static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mus_frames, float *voice) {
-    // إذا كان المايك مكتوم تماماً بشكل سريع، نفرغ العينات فوراً بسلاسة
-    if (g_mic_mute_fast) {
-        int is_float = (g_fmt.mFormatFlags & kAudioFormatFlagIsFloat) != 0;
-        UInt32 bits = g_fmt.mBitsPerChannel;
-        UInt32 bytes_per = bits / 8;
-        size_t n = ab->mDataByteSize / bytes_per;
-        memset(ab->mData, 0, ab->mDataByteSize);
-        update_peak(0.0f);
-        return;
-    }
+    // كتم المايك يسكت صوتي أنا وصداه فقط، والأغنية تكمل
+    int mic_off = g_mic_mute_fast;
 
     int is_float = (g_fmt.mFormatFlags & kAudioFormatFlagIsFloat) != 0;
     UInt32 bits = g_fmt.mBitsPerChannel;
-    if (!((is_float && bits == 32) || (!is_float && bits == 16))) return;
+    if (!((is_float && bits == 32) || (!is_float && bits == 16))) {
+        if (mic_off) memset(ab->mData, 0, ab->mDataByteSize);
+        return;
+    }
 
     UInt32 bytes_per = bits / 8;
     size_t n = ab->mDataByteSize / bytes_per;
@@ -593,10 +588,10 @@ static void process_buffer(int idx, AudioBuffer *ab, const float *mus, UInt32 mu
     int gn = g_gain;
     int semis = g_pitch;
 
-    int echo_on = echo_enabled();
-    int ps_on = (semis != 0) && chans == 1;
-    int robot_on = g_robot && chans == 1;
-    int mute = g_voice_mute && (mus != NULL || g_mplaying);
+    int echo_on = !mic_off && echo_enabled();
+    int ps_on = !mic_off && (semis != 0) && chans == 1;
+    int robot_on = !mic_off && g_robot && chans == 1;
+    int mute = mic_off || (g_voice_mute && (mus != NULL || g_mplaying));
     int changed = echo_on || ps_on || robot_on || gn != 100 || mus != NULL || mute;
 
     if (!changed) {
