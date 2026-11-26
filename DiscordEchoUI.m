@@ -990,7 +990,7 @@ enum { FX_NONE = 0, FX_CAT, FX_CLOWN, FX_SKULL, FX_ROBOT, FX_GLASSES, FX_MUSTACH
        FX_BIGEYES, FX_BIGMOUTH, FX_PUFFY, FX_THIN, FX_BLURFACE, FX_PIXFACE, FX_CUSTOM, FX_COUNT };
 
 static NSString *const kFxNames[FX_COUNT] = {
-    @"بدون", @"🐱 قطو", @"🤡 مهرج", @"💀 جمجمة", @"🤖 روبوت", @"🕶️ نظارة", @"🥸 شنب", @"👑 تاج", @"😍 قلوب",
+    @"بدون", @"🐱 قطو", @"🤡 مهرج", @"💀 مكياج جمجمة", @"🤖 روبوت", @"🕶️ نظارة", @"🥸 شنب", @"👑 تاج", @"😍 قلوب",
     @"👀 عيون كبيرة", @"👄 فم كبير", @"🎈 وجه منفوخ", @"📏 وجه نحيف", @"🌫️ تغبيش الوجه", @"🟦 بكسل الوجه", @"🖼️ قناعي"
 };
 
@@ -1075,18 +1075,6 @@ static void fx_draw(int fx) {
             fx_oval(CGRectMake(90 + i * 45, 330 - i * 70, 180, 180), red);
             fx_oval(CGRectMake(730 - i * 45, 330 - i * 70, 180, 180), red);
         }
-    } else if (fx == FX_SKULL) {
-        fx_mask([UIColor colorWithWhite:0.93 alpha:1]);
-        for (int x = 350; x <= 650; x += 300) {
-            UIBezierPath *ring = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(x - 100, 330, 200, 180)];
-            ring.lineWidth = 60; [black setStroke]; [ring stroke];
-        }
-        CGPoint nose[3] = { {500, 530}, {445, 630}, {555, 630} };
-        fx_poly(nose, 3, black);
-        fx_line(CGPointMake(300, 720), CGPointMake(390, 720), 12, black);
-        fx_line(CGPointMake(610, 720), CGPointMake(700, 720), 12, black);
-        for (int x = 320; x <= 680; x += 45) fx_line(CGPointMake(x, (x > 390 && x < 610) ? 780 : 690),
-                                                     CGPointMake(x, (x > 390 && x < 610) ? 840 : 755), 10, black);
     } else if (fx == FX_ROBOT) {
         UIColor *metal = [UIColor colorWithRed:0.55 green:0.6 blue:0.66 alpha:1];
         UIColor *glow = [UIColor colorWithRed:0.1 green:0.95 blue:1 alpha:1];
@@ -1140,9 +1128,12 @@ static UIImage *fx_render(void (^draw)(void)) {
         imageWithActions:^(UIGraphicsImageRendererContext *ctx) { draw(); }];
 }
 
+#define MAX_PTS 32
 typedef struct {
     CGPoint eyes, eyeA, eyeB, mouth;
     CGFloat eyeDist, mouthDist, angle;
+    CGPoint contour[MAX_PTS], eyePtsA[MAX_PTS], eyePtsB[MAX_PTS];
+    int nContour, nEyeA, nEyeB;
 } EchoFace;
 
 static CGPoint fx_center(VNFaceLandmarkRegion2D *r, CGSize size) {
@@ -1150,6 +1141,13 @@ static CGPoint fx_center(VNFaceLandmarkRegion2D *r, CGSize size) {
     CGFloat x = 0, y = 0;
     for (NSUInteger i = 0; i < r.pointCount; i++) { x += p[i].x; y += p[i].y; }
     return CGPointMake(x / r.pointCount, y / r.pointCount);
+}
+
+static int fx_copy(VNFaceLandmarkRegion2D *r, CGSize size, CGPoint *out) {
+    const CGPoint *p = [r pointsInImageOfSize:size];
+    int n = (int)MIN((NSUInteger)MAX_PTS, r.pointCount);
+    for (int i = 0; i < n; i++) out[i] = p[i];
+    return n;
 }
 
 static CGPoint fx_mix(CGPoint a, CGPoint b, CGFloat k) {
@@ -1174,6 +1172,9 @@ static BOOL fx_find_face(CIImage *img, EchoFace *out) {
     out->eyeA = fx_center(lm.leftEye, size);
     out->eyeB = fx_center(lm.rightEye, size);
     out->mouth = fx_center(lm.outerLips, size);
+    out->nContour = fx_copy(lm.faceContour, size, out->contour);
+    out->nEyeA = fx_copy(lm.leftEye, size, out->eyePtsA);
+    out->nEyeB = fx_copy(lm.rightEye, size, out->eyePtsB);
     return YES;
 }
 
@@ -1183,6 +1184,155 @@ static void fx_measure(EchoFace *f) {
     f->mouthDist = hypot(f->mouth.x - f->eyes.x, f->mouth.y - f->eyes.y);
     // الاتجاه من الفم للعينين، عشان القناع يميل مع الراس
     f->angle = atan2(f->eyes.y - f->mouth.y, f->eyes.x - f->mouth.x) - M_PI_2;
+}
+
+#pragma mark - مكياج يلتصق بالوجه
+
+// مسار ناعم مقفل يمر على النقاط
+static void paint_smooth(CGContextRef c, const CGPoint *p, int n) {
+    if (n < 3) return;
+    CGContextMoveToPoint(c, (p[n - 1].x + p[0].x) / 2, (p[n - 1].y + p[0].y) / 2);
+    for (int i = 0; i < n; i++) {
+        CGPoint a = p[i], b = p[(i + 1) % n];
+        CGContextAddQuadCurveToPoint(c, a.x, a.y, (a.x + b.x) / 2, (a.y + b.y) / 2);
+    }
+    CGContextClosePath(c);
+}
+
+// يحول نقطة من الصورة لإحداثيات الوجه: x يمين، y فوق، ووحدتها المسافة بين العينين
+static CGPoint paint_local(const EchoFace *f, CGPoint p) {
+    CGFloat dx = p.x - f->eyes.x, dy = p.y - f->eyes.y;
+    CGFloat c = cos(f->angle), s = sin(f->angle), d = MAX(1.0, f->eyeDist);
+    return CGPointMake((dx * c + dy * s) / d, (-dx * s + dy * c) / d);
+}
+
+static void paint_eyes_path(CGContextRef c, const EchoFace *f, const CGPoint *eye, int n) {
+    if (n < 3) return;
+    CGPoint q[MAX_PTS], mid = CGPointZero;
+    for (int i = 0; i < n; i++) { q[i] = paint_local(f, eye[i]); mid.x += q[i].x / n; mid.y += q[i].y / n; }
+    for (int i = 0; i < n; i++) q[i] = CGPointMake(mid.x + (q[i].x - mid.x) * 1.12, mid.y + (q[i].y - mid.y) * 1.3);
+    paint_smooth(c, q, n);
+}
+
+// layer: 0 = الأساس الأبيض، 1 = الرسم الأسود
+static void paint_skull(CGContextRef c, const EchoFace *f, int layer) {
+    CGPoint eyeA = paint_local(f, f->eyeA), eyeB = paint_local(f, f->eyeB), mouth = paint_local(f, f->mouth);
+    CGFloat md = MAX(0.7, -mouth.y); // طول الوجه من العينين للفم
+    CGContextSetGrayFillColor(c, 1, 1);
+    CGContextSetGrayStrokeColor(c, 1, 1);
+
+    if (layer == 0) {
+        // الفك من نقاط وجهك الحقيقية، والجبهة نكملها بقوس
+        CGPoint q[MAX_PTS + 8];
+        int n = 0, count = f->nContour;
+        if (count < 5) return;
+        BOOL leftFirst = paint_local(f, f->contour[0]).x < paint_local(f, f->contour[count - 1]).x;
+        for (int i = 0; i < count; i++) {
+            CGPoint p = paint_local(f, f->contour[leftFirst ? i : count - 1 - i]);
+            q[n++] = CGPointMake(p.x * 0.97, p.y * 0.98);
+        }
+        CGFloat rx = q[n - 1].x, lx = q[0].x;
+        q[n++] = CGPointMake(rx * 0.96, 0.45);
+        q[n++] = CGPointMake(rx * 0.68, 0.84);
+        q[n++] = CGPointMake(0, 0.98);
+        q[n++] = CGPointMake(lx * 0.68, 0.84);
+        q[n++] = CGPointMake(lx * 0.96, 0.45);
+        paint_smooth(c, q, n);
+        CGContextFillPath(c);
+    } else {
+        // محاجر العيون بحواف غير منتظمة
+        static const CGFloat kR[12] = { 1.0, 0.95, 1.08, 1.02, 0.94, 1.0, 1.04, 0.93, 1.16, 0.96, 1.03, 0.95 };
+        CGPoint eyes[2] = { eyeA, eyeB };
+        for (int e = 0; e < 2; e++) {
+            CGPoint q[12];
+            for (int i = 0; i < 12; i++) {
+                CGFloat a = 2 * M_PI * i / 12;
+                q[i] = CGPointMake(eyes[e].x + cos(a) * 0.37 * kR[i], eyes[e].y + 0.02 + sin(a) * 0.29 * kR[i]);
+            }
+            paint_smooth(c, q, 12);
+            CGContextFillPath(c);
+        }
+        // الأنف: مثلثين على شكل قلب مقلوب
+        CGFloat ny = -md * 0.62;
+        CGContextMoveToPoint(c, 0, ny + 0.2);
+        CGContextAddCurveToPoint(c, 0.08, ny + 0.08, 0.27, ny - 0.04, 0.17, ny - 0.13);
+        CGContextAddQuadCurveToPoint(c, 0.07, ny - 0.17, 0, ny - 0.08);
+        CGContextAddQuadCurveToPoint(c, -0.07, ny - 0.17, -0.17, ny - 0.13);
+        CGContextAddCurveToPoint(c, -0.27, ny - 0.04, -0.08, ny + 0.08, 0, ny + 0.2);
+        CGContextFillPath(c);
+        // الفم المخيط: خط يمر على فمك ويمتد للخدين
+        CGFloat half = 0.82, lift = 0.24;
+        CGContextSetLineCap(c, kCGLineCapRound);
+        CGContextSetLineWidth(c, 0.045);
+        CGContextMoveToPoint(c, mouth.x - half, mouth.y + lift);
+        CGContextAddQuadCurveToPoint(c, mouth.x, mouth.y - lift, mouth.x + half, mouth.y + lift);
+        CGContextStrokePath(c);
+        for (int i = 0; i <= 12; i++) {
+            CGFloat t = i / 12.0, u = 1 - t;
+            CGFloat x = u * u * (mouth.x - half) + 2 * u * t * mouth.x + t * t * (mouth.x + half);
+            CGFloat y = u * u * (mouth.y + lift) + 2 * u * t * (mouth.y - lift) + t * t * (mouth.y + lift);
+            CGFloat h = 0.07 + 0.08 * sin(M_PI * t);
+            CGContextSetLineWidth(c, 0.032);
+            CGContextMoveToPoint(c, x - 0.012, y + h);
+            CGContextAddLineToPoint(c, x + 0.012, y - h);
+            CGContextStrokePath(c);
+        }
+    }
+    // نفرغ مكان العيون عشان تطلع عيونك الحقيقية
+    CGContextSetGrayFillColor(c, 0, 1);
+    paint_eyes_path(c, f, f->eyePtsA, f->nEyeA);
+    CGContextFillPath(c);
+    paint_eyes_path(c, f, f->eyePtsB, f->nEyeB);
+    CGContextFillPath(c);
+}
+
+// قناع رمادي بنفس إحداثيات الصورة، بدقة مخففة عشان السرعة
+static CIImage *paint_mask(const EchoFace *f, CGSize size, int layer) {
+    CGFloat k = MIN(1.0, 640.0 / MAX(size.width, size.height));
+    size_t w = MAX(1, (size_t)(size.width * k)), h = MAX(1, (size_t)(size.height * k));
+    CGColorSpaceRef gray = CGColorSpaceCreateDeviceGray();
+    CGContextRef c = CGBitmapContextCreate(NULL, w, h, 8, 0, gray, (CGBitmapInfo)kCGImageAlphaNone);
+    CGColorSpaceRelease(gray);
+    if (!c) return nil;
+    CGContextSetGrayFillColor(c, 0, 1);
+    CGContextFillRect(c, CGRectMake(0, 0, w, h));
+    CGContextScaleCTM(c, k, k);
+    CGContextTranslateCTM(c, f->eyes.x, f->eyes.y);
+    CGContextRotateCTM(c, f->angle);
+    CGContextScaleCTM(c, f->eyeDist, f->eyeDist);
+    paint_skull(c, f, layer);
+    CGImageRef cg = CGBitmapContextCreateImage(c);
+    CGContextRelease(c);
+    if (!cg) return nil;
+    CIImage *m = [CIImage imageWithCGImage:cg];
+    CGImageRelease(cg);
+    m = [m imageByApplyingTransform:CGAffineTransformMakeScale(size.width / w, size.height / h)];
+    // تنعيم الحواف عشان تبان كأنها دهان
+    CGFloat soft = f->eyeDist * (layer == 0 ? 0.045 : 0.012);
+    return [[[m imageByClampingToExtent] imageByApplyingFilter:@"CIGaussianBlur"
+                                           withInputParameters:@{ kCIInputRadiusKey: @(soft) }]
+            imageByCroppingToRect:CGRectMake(0, 0, size.width, size.height)];
+}
+
+// نلون نسخة من صورتك نفسها، فيبقى ظل وملمس البشرة تحت الدهان
+static CIImage *paint_tone(CIImage *img, CGFloat gain, CGFloat r, CGFloat g, CGFloat b) {
+    CIImage *mono = [img imageByApplyingFilter:@"CIColorControls" withInputParameters:@{ kCIInputSaturationKey: @0 }];
+    return [mono imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{
+        @"inputRVector": [CIVector vectorWithX:gain Y:0 Z:0 W:0],
+        @"inputGVector": [CIVector vectorWithX:0 Y:gain Z:0 W:0],
+        @"inputBVector": [CIVector vectorWithX:0 Y:0 Z:gain W:0],
+        @"inputBiasVector": [CIVector vectorWithX:r Y:g Z:b W:0] }];
+}
+
+static CIImage *paint_apply(CIImage *img, const EchoFace *f) {
+    CGSize size = img.extent.size;
+    CIImage *base = paint_mask(f, size, 0), *ink = paint_mask(f, size, 1);
+    if (!base || !ink) return img;
+    CIImage *out = [paint_tone(img, 0.55, 0.28, 0.30, 0.34) imageByApplyingFilter:@"CIBlendWithMask"
+        withInputParameters:@{ kCIInputBackgroundImageKey: img, kCIInputMaskImageKey: base }];
+    out = [paint_tone(img, 0.10, 0.01, 0.01, 0.015) imageByApplyingFilter:@"CIBlendWithMask"
+        withInputParameters:@{ kCIInputBackgroundImageKey: out, kCIInputMaskImageKey: ink }];
+    return [out imageByCroppingToRect:img.extent];
 }
 
 enum { SHAPE_EYES = 0, SHAPE_MOUTH, SHAPE_NOSE, SHAPE_CHIN, SHAPE_FACE, SHAPE_COUNT };
@@ -1294,6 +1444,12 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
                 found.eyeA = fx_mix(_face.eyeA, found.eyeA, k);
                 found.eyeB = fx_mix(_face.eyeB, found.eyeB, k);
                 found.mouth = fx_mix(_face.mouth, found.mouth, k);
+                if (found.nContour == _face.nContour)
+                    for (int i = 0; i < found.nContour; i++) found.contour[i] = fx_mix(_face.contour[i], found.contour[i], k);
+                if (found.nEyeA == _face.nEyeA)
+                    for (int i = 0; i < found.nEyeA; i++) found.eyePtsA[i] = fx_mix(_face.eyePtsA[i], found.eyePtsA[i], k);
+                if (found.nEyeB == _face.nEyeB)
+                    for (int i = 0; i < found.nEyeB; i++) found.eyePtsB[i] = fx_mix(_face.eyePtsB[i], found.eyePtsB[i], k);
             }
             fx_measure(&found);
             _face = found;
@@ -1326,6 +1482,7 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
 }
 
 - (CIImage *)effect:(int)fx on:(CIImage *)img face:(EchoFace)face {
+    if (fx == FX_SKULL) return paint_apply(img, &face);
     CGFloat d = face.eyeDist;
     CGPoint middle = fx_mix(face.eyes, face.mouth, 0.5);
     if (fx == FX_BIGEYES) {
