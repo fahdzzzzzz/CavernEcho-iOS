@@ -342,7 +342,7 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - متصفح داخلي (مع حفظ الروابط الحالية لكل نافذة وتحديثها تلقائياً)
+#pragma mark - متصفح داخلي
 
 @interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
@@ -971,19 +971,21 @@ static NSString *const kCamFilterNames[8] = { @"بدون", @"أبيض وأسود
 static NSString *const kCamFilters[8] = { nil, @"CIPhotoEffectNoir", @"CIPhotoEffectChrome", @"CISepiaTone",
                                           @"CIPixellate", @"CIGaussianBlur", @"CIComicEffect", @"CIColorInvert" };
 
-#pragma mark - مؤثرات الوجه وتبديل الوجه
+#pragma mark - مؤثرات وتغيير ملامح الوجه
 
 enum {
     FX_NONE = 0, FX_CAT, FX_CLOWN, FX_SKULL, FX_ROBOT, FX_GLASSES, FX_MUSTACHE, FX_CROWN, FX_HEARTS,
     FX_BIGEYES, FX_BIGMOUTH, FX_PUFFY, FX_THIN, FX_BLURFACE, FX_PIXFACE,
     FX_DEVIL, FX_VAMPIRE, FX_CYBER, FX_CUSTOM, FX_SWAP,
+    FX_AI_SCULPT, FX_AI_SOFT, FX_AI_SHARP,
     FX_COUNT
 };
 
 static NSString *const kFxNames[FX_COUNT] = {
     @"بدون", @"🐱 قطو", @"🤡 مهرج", @"💀 مكياج جمجمة", @"🤖 روبوت", @"🕶️ نظارة", @"🥸 شنب", @"👑 تاج", @"😍 قلوب",
     @"👀 عيون كبيرة", @"👄 فم كبير", @"🎈 وجه منفوخ", @"📏 وجه نحيف", @"🌫️ تغبيش الوجه", @"🟦 بكسل الوجه",
-    @"😈 قرون", @"🧛 مصاص دماء", @"🕶️‍🗨️ سايبربانك", @"🖼️ قناعي", @"🎭 تبديل وجه"
+    @"😈 قرون", @"🧛 مصاص دماء", @"🕶️‍🗨️ سايبربانك", @"🖼️ قناعي", @"✨ دمج ملامح",
+    @"🪄 نحت AI", @"🌸 ملامح ناعمة", @"⚡ ملامح حادة"
 };
 
 static void fx_oval(CGRect r, UIColor *c) {
@@ -1332,11 +1334,10 @@ static CIImage *paint_apply(CIImage *img, const EchoFace *f) {
     return [out imageByCroppingToRect:img.extent];
 }
 
-#pragma mark - تبديل وجه (Face Swap) بمطابقة ثلاث نقاط وتناسق ملامح الوجه
+#pragma mark - دمج وتعديل ملامح الوجه (Morph & Blend)
 
 static CGAffineTransform swap_affine_three_points(CGPoint s0, CGPoint s1, CGPoint s2,
                                                 CGPoint d0, CGPoint d1, CGPoint d2) {
-    // يحسب تحويل أفيني (إزاحة + تدوير + مقياس + انحراف خفيف) ينقل ثلاث نقاط من المصدر إلى ثلاث نقاط في الهدف
     CGFloat dsx1 = s1.x - s0.x, dsy1 = s1.y - s0.y;
     CGFloat dsx2 = s2.x - s0.x, dsy2 = s2.y - s0.y;
     CGFloat det = dsx1 * dsy2 - dsy1 * dsx2;
@@ -1368,7 +1369,7 @@ static CGAffineTransform swap_affine_three_points(CGPoint s0, CGPoint s1, CGPoin
     return CGAffineTransformMake(a, b, c, d, tx, ty);
 }
 
-static CIImage *swap_face_mask(const EchoFace *f, CGSize size) {
+static CIImage *morph_soft_mask(const EchoFace *f, CGSize size, CGFloat mixWeight) {
     CGFloat k = MIN(1.0, 640.0 / MAX(size.width, size.height));
     size_t w = MAX(1, (size_t)(size.width * k)), h = MAX(1, (size_t)(size.height * k));
     CGColorSpaceRef gray = CGColorSpaceCreateDeviceGray();
@@ -1384,30 +1385,40 @@ static CIImage *swap_face_mask(const EchoFace *f, CGSize size) {
     CGContextRotateCTM(c, f->angle);
     CGContextScaleCTM(c, MAX(1.0, f->eyeDist), MAX(1.0, f->eyeDist));
 
-    CGContextSetGrayFillColor(c, 1, 1);
+    // وزن الدمج النهائي (مثال 0.65 يعطي مزج واضح لملامح المصدر مع بقاء ملامح وجهك الأساسية واضحة)
+    CGFloat shade = MIN(0.85, MAX(0.25, mixWeight));
+    CGContextSetGrayFillColor(c, shade, 1);
+
     if (f->nContour >= 5) {
         CGPoint q[MAX_PTS + 8];
         int n = 0;
         BOOL leftFirst = paint_local(f, f->contour[0]).x < paint_local(f, f->contour[f->nContour - 1]).x;
         for (int i = 0; i < f->nContour; i++) {
             CGPoint p = paint_local(f, f->contour[leftFirst ? i : f->nContour - 1 - i]);
-            q[n++] = CGPointMake(p.x * 0.94, p.y * 0.95);
+            q[n++] = CGPointMake(p.x * 0.88, p.y * 0.90);
         }
         CGFloat rx = q[n - 1].x, lx = q[0].x;
-        q[n++] = CGPointMake(rx * 0.92, 0.55);
-        q[n++] = CGPointMake(rx * 0.65, 0.88);
-        q[n++] = CGPointMake(0, 0.96);
-        q[n++] = CGPointMake(lx * 0.65, 0.88);
-        q[n++] = CGPointMake(lx * 0.92, 0.55);
+        q[n++] = CGPointMake(rx * 0.86, 0.45);
+        q[n++] = CGPointMake(rx * 0.60, 0.80);
+        q[n++] = CGPointMake(0, 0.90);
+        q[n++] = CGPointMake(lx * 0.60, 0.80);
+        q[n++] = CGPointMake(lx * 0.86, 0.45);
         paint_smooth(c, q, n);
         CGContextFillPath(c);
     } else {
         CGPoint mouthLocal = paint_local(f, f->mouth);
         CGFloat cy = mouthLocal.y * 0.42;
-        CGFloat rx = 0.96;
-        CGFloat ry = MAX(0.95, fabs(mouthLocal.y) * 1.15);
+        CGFloat rx = 0.88;
+        CGFloat ry = MAX(0.85, fabs(mouthLocal.y) * 1.05);
         CGContextFillEllipseInRect(c, CGRectMake(-rx, cy - ry, rx * 2.0, ry * 2.0));
     }
+
+    // تخفيف الحدة حول العيون حتى تبقى نظرتك وملامح عينيك طبيعية ومتداخلة
+    CGContextSetGrayFillColor(c, shade * 0.35, 1);
+    paint_eyes_path(c, f, f->eyePtsA, f->nEyeA);
+    CGContextFillPath(c);
+    paint_eyes_path(c, f, f->eyePtsB, f->nEyeB);
+    CGContextFillPath(c);
 
     CGImageRef cg = CGBitmapContextCreateImage(c);
     CGContextRelease(c);
@@ -1416,7 +1427,7 @@ static CIImage *swap_face_mask(const EchoFace *f, CGSize size) {
     CIImage *m = [CIImage imageWithCGImage:cg];
     CGImageRelease(cg);
     m = [m imageByApplyingTransform:CGAffineTransformMakeScale(size.width / w, size.height / h)];
-    CGFloat soft = MAX(5.0, f->eyeDist * 0.11);
+    CGFloat soft = MAX(10.0, f->eyeDist * 0.18);
     return [[[m imageByClampingToExtent]
              imageByApplyingFilter:@"CIGaussianBlur"
                withInputParameters:@{ kCIInputRadiusKey: @(soft) }]
@@ -1426,26 +1437,60 @@ static CIImage *swap_face_mask(const EchoFace *f, CGSize size) {
 static CIImage *swap_apply(CIImage *dstImg, CIImage *srcFaceImg, const EchoFace *srcFace, const EchoFace *dstFace) {
     if (!srcFaceImg || srcFace->eyeDist < 2.0 || dstFace->eyeDist < 2.0) return dstImg;
 
+    // 1. نحت/تحريك ملامح وجهك الأساسية أولاً ليتغير شكل الفك والأنف والوجنتين
+    CGFloat d = dstFace->eyeDist;
+    CGPoint nose = fx_mix(dstFace->eyes, dstFace->mouth, 0.62);
+    CGPoint chin = fx_mix(dstFace->eyes, dstFace->mouth, 1.58);
+    CGPoint mid  = fx_mix(dstFace->eyes, dstFace->mouth, 0.5);
+
+    CIFilter *pinch = [CIFilter filterWithName:@"CIPinchDistortion"];
+    CIImage *morphedDst = dstImg;
+    if (pinch) {
+        [pinch setValue:[morphedDst imageByClampingToExtent] forKey:kCIInputImageKey];
+        [pinch setValue:[CIVector vectorWithX:mid.x Y:mid.y] forKey:kCIInputCenterKey];
+        [pinch setValue:@(d * 1.85) forKey:kCIInputRadiusKey];
+        [pinch setValue:@(0.14) forKey:kCIInputScaleKey];
+        if (pinch.outputImage) morphedDst = [pinch.outputImage imageByCroppingToRect:dstImg.extent];
+    }
+
+    CIFilter *bumpNose = [CIFilter filterWithName:@"CIBumpDistortion"];
+    if (bumpNose) {
+        [bumpNose setValue:[morphedDst imageByClampingToExtent] forKey:kCIInputImageKey];
+        [bumpNose setValue:[CIVector vectorWithX:nose.x Y:nose.y] forKey:kCIInputCenterKey];
+        [bumpNose setValue:@(d * 0.55) forKey:kCIInputRadiusKey];
+        [bumpNose setValue:@(0.18) forKey:kCIInputScaleKey];
+        if (bumpNose.outputImage) morphedDst = [bumpNose.outputImage imageByCroppingToRect:dstImg.extent];
+    }
+
+    CIFilter *bumpChin = [CIFilter filterWithName:@"CIBumpDistortion"];
+    if (bumpChin) {
+        [bumpChin setValue:[morphedDst imageByClampingToExtent] forKey:kCIInputImageKey];
+        [bumpChin setValue:[CIVector vectorWithX:chin.x Y:chin.y] forKey:kCIInputCenterKey];
+        [bumpChin setValue:@(d * 0.75) forKey:kCIInputRadiusKey];
+        [bumpChin setValue:@(-0.12) forKey:kCIInputScaleKey];
+        if (bumpChin.outputImage) morphedDst = [bumpChin.outputImage imageByCroppingToRect:dstImg.extent];
+    }
+
+    // 2. مطابقة ثلاث نقاط لملامح الوجه المصدر ودمجها بنعومة فوق الوجه المعدّل
     CGAffineTransform t = swap_affine_three_points(
         srcFace->eyeA, srcFace->eyeB, srcFace->mouth,
         dstFace->eyeA, dstFace->eyeB, dstFace->mouth
     );
 
     CIImage *warpedSrc = [[srcFaceImg imageByApplyingTransform:t] imageByCroppingToRect:dstImg.extent];
-    // مواءمة خفيفة للتباين والسطوع لتقريب نبرة الوجه المصدر من وجه الهدف
     warpedSrc = [warpedSrc imageByApplyingFilter:@"CIColorControls"
                              withInputParameters:@{
-                                 kCIInputSaturationKey: @0.96,
-                                 kCIInputContrastKey: @1.04,
-                                 kCIInputBrightnessKey: @0.01
+                                 kCIInputSaturationKey: @0.92,
+                                 kCIInputContrastKey: @1.02,
+                                 kCIInputBrightnessKey: @0.0
                              }];
 
-    CIImage *mask = swap_face_mask(dstFace, dstImg.extent.size);
-    if (!mask) return dstImg;
+    CIImage *mask = morph_soft_mask(dstFace, dstImg.extent.size, 0.62);
+    if (!mask) return morphedDst;
 
     return [[warpedSrc imageByApplyingFilter:@"CIBlendWithMask"
                           withInputParameters:@{
-                              kCIInputBackgroundImageKey: dstImg,
+                              kCIInputBackgroundImageKey: morphedDst,
                               kCIInputMaskImageKey: mask
                           }] imageByCroppingToRect:dstImg.extent];
 }
@@ -1680,8 +1725,41 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
         if (!_haveSwapSource || !_swapSourceImg) return img;
         return swap_apply(img, _swapSourceImg, &_swapSourceFace, &face);
     }
+
     CGFloat d = face.eyeDist;
+    CGPoint nose = fx_mix(face.eyes, face.mouth, 0.62);
+    CGPoint chin = fx_mix(face.eyes, face.mouth, 1.58);
     CGPoint middle = fx_mix(face.eyes, face.mouth, 0.5);
+
+    if (fx == FX_AI_SCULPT) {
+        CIImage *out = [self warp:img name:@"CIPinchDistortion" at:middle radius:d * 1.9 scale:0.16];
+        out = [self warp:out name:@"CIBumpDistortion" at:nose radius:d * 0.55 scale:0.20];
+        out = [self warp:out name:@"CIBumpDistortion" at:chin radius:d * 0.78 scale:-0.14];
+        return [out imageByApplyingFilter:@"CIColorControls"
+                        withInputParameters:@{ kCIInputContrastKey: @1.08, kCIInputSaturationKey: @1.05 }];
+    }
+
+    if (fx == FX_AI_SOFT) {
+        CIImage *out = [self warp:img name:@"CIBumpDistortion" at:face.eyeA radius:d * 0.52 scale:0.16];
+        out = [self warp:out name:@"CIBumpDistortion" at:face.eyeB radius:d * 0.52 scale:0.16];
+        out = [self warp:out name:@"CIBumpDistortion" at:middle radius:d * 1.8 scale:0.12];
+        CIImage *softened = [[out imageByClampingToExtent]
+            imageByApplyingFilter:@"CIGaussianBlur" withInputParameters:@{ kCIInputRadiusKey: @(MAX(2.0, d * 0.025)) }];
+        softened = [softened imageByCroppingToRect:img.extent];
+        CIImage *mask = morph_soft_mask(&face, img.extent.size, 0.55);
+        if (!mask) return out;
+        return [[softened imageByApplyingFilter:@"CIBlendWithMask"
+                             withInputParameters:@{ kCIInputBackgroundImageKey: out, kCIInputMaskImageKey: mask }]
+                imageByCroppingToRect:img.extent];
+    }
+
+    if (fx == FX_AI_SHARP) {
+        CIImage *out = [self warp:img name:@"CIPinchDistortion" at:middle radius:d * 1.85 scale:0.22];
+        out = [self warp:out name:@"CIBumpDistortion" at:chin radius:d * 0.75 scale:-0.20];
+        return [out imageByApplyingFilter:@"CIColorControls"
+                        withInputParameters:@{ kCIInputContrastKey: @1.14, kCIInputSaturationKey: @0.96 }];
+    }
+
     if (fx == FX_BIGEYES) {
         img = [self warp:img name:@"CIBumpDistortion" at:face.eyeA radius:d * 0.55 scale:0.45];
         return [self warp:img name:@"CIBumpDistortion" at:face.eyeB radius:d * 0.55 scale:0.45];
@@ -2364,7 +2442,7 @@ static void echo_cam_install(void) {
     [tab addSubview:[self makeButton:@"↺ رجّع ملامحي" frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(shapeReset)]];
     y += 44;
 
-    y = [self addHeader:@"🎭 مؤثرات الوجه" to:tab y:y];
+    y = [self addHeader:@"🎭 مؤثرات وتغيير ملامح الوجه" to:tab y:y];
     NSMutableArray *fxb = [NSMutableArray array];
     for (NSInteger i = 0; i < FX_COUNT; i++) {
         UIButton *b = [self makeButton:kFxNames[i]
@@ -2375,7 +2453,7 @@ static void echo_cam_install(void) {
     }
     self.camFxBtns = fxb;
     y += ((FX_COUNT + 2) / 3) * 40 + 2;
-    [tab addSubview:[self makeButton:@"🎭 تبديل وجه من الصور" frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(camPickSwapFace)]];
+    [tab addSubview:[self makeButton:@"✨ دمج ملامح وجه من الصور" frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(camPickSwapFace)]];
     y += 40;
     [tab addSubview:[self makeButton:@"➕ حط قناعك (صورة PNG شفافة)" frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(camPickMask)]];
     y += 44;
@@ -2591,7 +2669,7 @@ static void echo_cam_install(void) {
         }
         [EchoCam shared].effect = FX_SWAP;
         [self refreshCamButtons];
-        self.camSource.text = @"🎭 تم تحميل الوجه ومطابقة ملامحه";
+        self.camSource.text = @"✨ تم دمج الملامح مع وجهك";
         return;
     }
     if (self.pickingMask) {
