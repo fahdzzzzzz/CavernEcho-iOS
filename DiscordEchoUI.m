@@ -1159,7 +1159,10 @@ static CGPoint fx_mix(CGPoint a, CGPoint b, CGFloat k) {
 // يطلع أماكن العينين والفم لأكبر وجه في الصورة
 static BOOL fx_find_face(CIImage *img, EchoFace *out) {
     VNDetectFaceLandmarksRequest *req = [[VNDetectFaceLandmarksRequest alloc] init];
-    VNImageRequestHandler *h = [[VNImageRequestHandler alloc] initWithCIImage:img options:@{}];
+    CGSize size = img.extent.size;
+    CGFloat shrink = MIN(1.0, 480.0 / MAX(size.width, size.height));
+    CIImage *small = shrink < 1.0 ? [img imageByApplyingTransform:CGAffineTransformMakeScale(shrink, shrink)] : img;
+    VNImageRequestHandler *h = [[VNImageRequestHandler alloc] initWithCIImage:small options:@{}];
     NSError *e = nil;
     if (![h performRequests:@[req] error:&e]) return NO;
     VNFaceObservation *best = nil;
@@ -1168,7 +1171,6 @@ static BOOL fx_find_face(CIImage *img, EchoFace *out) {
     }
     VNFaceLandmarks2D *lm = best.landmarks;
     if (!lm.leftEye.pointCount || !lm.rightEye.pointCount || !lm.outerLips.pointCount) return NO;
-    CGSize size = img.extent.size;
     out->eyeA = fx_center(lm.leftEye, size);
     out->eyeB = fx_center(lm.rightEye, size);
     out->mouth = fx_center(lm.outerLips, size);
@@ -1218,7 +1220,6 @@ static void fx_measure(EchoFace *f) {
     EchoFace _face;
     BOOL _haveFace;
     CFTimeInterval _faceTime;
-    unsigned _tick;
     int _searchTurn;
 }
 
@@ -1241,13 +1242,17 @@ static void fx_measure(EchoFace *f) {
     up = [up imageByApplyingTransform:CGAffineTransformMakeTranslation(-up.extent.origin.x, -up.extent.origin.y)];
 
     CFTimeInterval now = CACurrentMediaTime();
-    if ((_tick++ & 1) == 0 || !_haveFace) { // الكشف كل إطارين لتخفيف الحرارة
+    { // الكشف على كل إطار عشان القناع يطابق نفس الصورة
         EchoFace found;
         if (fx_find_face(up, &found)) {
-            if (_haveFace) { // تنعيم الحركة
-                found.eyeA = fx_mix(_face.eyeA, found.eyeA, 0.65);
-                found.eyeB = fx_mix(_face.eyeB, found.eyeB, 0.65);
-                found.mouth = fx_mix(_face.mouth, found.mouth, 0.65);
+            if (_haveFace) {
+                // تنعيم ذكي: وأنت ثابت ينعّم الرجفة، ووأنت تتحرك يلحقك على طول
+                CGPoint was = fx_mix(_face.eyeA, _face.eyeB, 0.5), is = fx_mix(found.eyeA, found.eyeB, 0.5);
+                CGFloat move = hypot(is.x - was.x, is.y - was.y);
+                CGFloat k = MIN(1.0, 0.3 + move / MAX(1.0, _face.eyeDist * 0.1));
+                found.eyeA = fx_mix(_face.eyeA, found.eyeA, k);
+                found.eyeB = fx_mix(_face.eyeB, found.eyeB, k);
+                found.mouth = fx_mix(_face.mouth, found.mouth, k);
             }
             fx_measure(&found);
             _face = found;
