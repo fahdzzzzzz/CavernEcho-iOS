@@ -347,6 +347,9 @@ static NSString *EchoTime(float s) {
 @property (nonatomic) BOOL restoring;
 @property (nonatomic, copy) NSString *pendingVideo;
 @property (nonatomic, weak) WKWebView *pendingWeb;
+@property (nonatomic, weak) WKWebView *autoWeb;
+@property (nonatomic) NSInteger autoStep;
+@property (nonatomic) NSUInteger autoGen;
 @end
 
 @implementation EchoBrowserController
@@ -453,6 +456,14 @@ static NSString *EchoTime(float s) {
                                              selector:@selector(saveCurrentTabsState)
                                                  name:UIApplicationWillResignActiveNotification
                                                object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(silenceTabs)
+                                                 name:UIApplicationDidEnterBackgroundNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(resumeAllowed)
+                                                 name:UIApplicationWillEnterForegroundNotification
+                                               object:nil];
 }
 
 - (void)saveCurrentTabsState {
@@ -511,6 +522,7 @@ static NSString *EchoTime(float s) {
     if (target < 0) [self openTabWithConfig:nil];
     else [self selectTab:target];
 
+    [self stopAuto];
     self.pendingVideo = video.absoluteString;
     self.pendingWeb = self.web;
     UIPasteboard.generalPasteboard.string = self.pendingVideo; // احتياط للصق اليدوي
@@ -518,33 +530,155 @@ static NSString *EchoTime(float s) {
     [self loadText:kConverterURL];
 }
 
-- (void)fillConverter:(WKWebView *)wv video:(NSString *)video {
+#pragma mark - التنزيل التلقائي
+
+- (void)stopAuto {
+    self.autoGen++;
+    self.autoWeb = nil;
+    self.autoStep = 0;
+}
+
+- (void)startAuto:(WKWebView *)wv video:(NSString *)video {
+    [self stopAuto];
+    self.autoWeb = wv;
+    [self runAuto:video gen:self.autoGen tries:0];
+}
+
+// كل ثانية يشوف وش الخطوة الجاية: تنزيل ← صوت ← MP3 320 ← تحميل
+- (void)runAuto:(NSString *)video gen:(NSUInteger)gen tries:(int)tries {
+    if (gen != self.autoGen || !self.autoWeb) return;
+    NSString *host = [NSURL URLWithString:kConverterURL].host;
+    if (tries >= 90) {
+        self.status.text = @"ما كملت تلقائي. كمّل الباقي بيدك (الرابط منسوخ)";
+        [self stopAuto];
+        return;
+    }
+    __weak EchoBrowserController *ws = self;
+    void (^again)(void) = ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [ws runAuto:video gen:gen tries:tries + 1];
+        });
+    };
+    // ما نشغّل السكربت إلا على موقع التحويل
+    if (self.autoWeb.loading || ![self.autoWeb.URL.host isEqualToString:host]) { again(); return; }
+
     // نمرر الرابط كـ JSON عشان ما يكسر السكربت
     NSData *data = [NSJSONSerialization dataWithJSONObject:@[video] options:0 error:nil];
     NSString *arg = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    NSString *js = [NSString stringWithFormat:
-        @"(function(url){"
-         "var i=document.querySelector('input[type=url],input[type=search],input[type=text],input:not([type])');"
-         "if(!i)return 'noinput';"
-         "var set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;"
-         "set.call(i,url);"
-         "i.dispatchEvent(new Event('input',{bubbles:true}));"
-         "i.dispatchEvent(new Event('change',{bubbles:true}));"
-         "var f=i.form;"
-         "var b=f&&f.querySelector('button,input[type=submit]');"
-         "if(b){b.click();return 'ok';}"
-         "return 'filled';"
-         "})(%@[0])", arg];
-    __weak EchoBrowserController *ws = self;
-    [wv evaluateJavaScript:js completionHandler:^(id result, NSError *e) {
-        if ([result isEqual:@"ok"])
-            ws.status.text = @"✅ حطيت الرابط. اختر MP3 واضغط تحميل، والملف ينضاف للأغاني";
-        else if ([result isEqual:@"filled"])
-            ws.status.text = @"✅ حطيت الرابط. اضغط زر التحويل في الصفحة";
-        else
-            ws.status.text = @"ما لقيت خانة الرابط. الرابط منسوخ، الصقه يدوي";
+    NSString *js = [NSString stringWithFormat:@"%@(%@[0],%ld)", [self autoScript], arg, (long)self.autoStep];
+    [self.autoWeb evaluateJavaScript:js completionHandler:^(id result, NSError *e) {
+        EchoBrowserController *me = ws;
+        if (!me || gen != me.autoGen) return;
+        if ([result isKindOfClass:NSNumber.class]) {
+            NSInteger next = [result integerValue];
+            if (next != me.autoStep) {
+                me.autoStep = next;
+                NSArray *msgs = @[@"", @"⏳ ضغطت تنزيل…", @"⏳ اخترت الصوت…", @"⏳ اخترت MP3 320…", @"⏳ ضغطت تحميل، أنتظر الملف…"];
+                if (next > 0 && next < (NSInteger)msgs.count) me.status.text = msgs[next];
+            }
+            if (next >= 4) return;
+        }
+        again();
     }];
 }
+
+- (NSString *)autoScript {
+    return
+         "(function(url,step){"
+         "var seen=function(e){var r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';};"
+         "var txt=function(e){return (e.innerText||e.value||'').replace(/\\s+/g,' ').trim();};"
+         "var all=function(q,root){return Array.prototype.filter.call((root||document).querySelectorAll(q),seen);};"
+         "var CLICK='button,a,input[type=button],input[type=submit],[role=button],[role=tab]';"
+         "var DL=/download|تحميل|تنزيل|حمل/i;"
+         "var GO=/download|convert|get link|تحميل|تنزيل|حمل|تحويل/i;"
+         "var mark=function(){all(CLICK).forEach(function(e){e.setAttribute('data-echo-old','1');});};"
+         "var find320=function(){"
+         "var sels=all('select');"
+         "for(var s=0;s<sels.length;s++){"
+         "var o=Array.prototype.filter.call(sels[s].options,function(x){return /320/.test(x.text);});"
+         "var m=o.filter(function(x){return /mp3/i.test(x.text);})[0]||o[0];"
+         "if(!m)continue;"
+         "var box=sels[s].parentElement;"
+         "for(var u=0;u<4&&box;u++,box=box.parentElement){"
+         "var b=all(CLICK,box).filter(function(e){return GO.test(txt(e));})[0];"
+         "if(b)return {select:sels[s],value:m.value,button:b};"
+         "}"
+         "}"
+         "var els=all(CLICK);"
+         "for(var i=0;i<els.length;i++){"
+         "var t=txt(els[i]);"
+         "if(/320\\s*k/i.test(t))return {button:els[i]};"
+         "if(!GO.test(t))continue;"
+         "var row=els[i].closest('tr,li');"
+         "if(row&&/320\\s*k/i.test(txt(row)))return {button:els[i]};"
+         "}"
+         "return null;"
+         "};"
+         "if(step===0){"
+         "var inp=all('input[type=url],input[type=search],input[type=text],input:not([type])')[0];"
+         "if(!inp)return 0;"
+         "Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(inp,url);"
+         "inp.dispatchEvent(new Event('input',{bubbles:true}));"
+         "inp.dispatchEvent(new Event('change',{bubbles:true}));"
+         "var near=inp.parentElement,go=null;"
+         "for(var n=0;n<4&&near&&!go;n++,near=near.parentElement)"
+         "go=all(CLICK,near).filter(function(e){return GO.test(txt(e))||e.type==='submit';})[0];"
+         "if(!go)return 0;"
+         "go.click();return 1;"
+         "}"
+         "if(step===1){"
+         "var tab=all(CLICK+',li,span').filter(function(e){return /^\\W*(audio|mp3|audio mp3|mp3 audio|صوت|الصوت|ملف صوتي)\\W*$/i.test(txt(e));})[0];"
+         "if(tab){tab.click();return 2;}"
+         "return find320()?2:1;"
+         "}"
+         "if(step===2){"
+         "var hit=find320();"
+         "if(!hit)return 2;"
+         "mark();"
+         "if(hit.select){hit.select.value=hit.value;hit.select.dispatchEvent(new Event('change',{bubbles:true}));}"
+         "hit.button.click();return 3;"
+         "}"
+         "var fin=all(CLICK).filter(function(e){return !e.hasAttribute('data-echo-old')&&DL.test(txt(e));})[0];"
+         "if(fin){fin.click();return 4;}"
+         "return 3;"
+         "})";
+}
+
+#pragma mark - إيقاف الصوت عند الخروج من المتصفح
+
+// لما ترجع للتطبيق والمتصفح مفتوح، نسمح بالتشغيل من جديد
+- (void)resumeAllowed {
+    if (!self.viewIfLoaded.window) return;
+    if (@available(iOS 15.0, *)) {
+        for (WKWebView *w in self.tabs) [w setAllMediaPlaybackSuspended:NO completionHandler:nil];
+    }
+}
+
+// يوقف الفيديو والصوت بدون ما يعيد تحميل الصفحة
+- (void)silenceTabs {
+    for (WKWebView *w in self.tabs) {
+        if (@available(iOS 15.0, *)) {
+            [w pauseAllMediaPlaybackWithCompletionHandler:nil];
+            [w setAllMediaPlaybackSuspended:YES completionHandler:nil];
+        } else {
+            [w evaluateJavaScript:@"document.querySelectorAll('video,audio').forEach(function(m){m.pause();})"
+                completionHandler:nil];
+        }
+    }
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    if (@available(iOS 15.0, *)) {
+        for (WKWebView *w in self.tabs) [w setAllMediaPlaybackSuspended:NO completionHandler:nil];
+    }
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    if (!self.presentingViewController || self.isBeingDismissed) [self silenceTabs];
+}
+
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
@@ -659,6 +793,7 @@ static NSString *EchoTime(float s) {
 - (void)closeTabTapped {
     if (self.tabs.count <= 1) { self.status.text = @"هذي آخر نافذة. اضغط ✕ إغلاق لو تبغى تطلع"; return; }
     WKWebView *w = self.web;
+    if (w == self.autoWeb) [self stopAuto];
     if (w == self.pendingWeb) { self.pendingWeb = nil; self.pendingVideo = nil; }
     [w removeObserver:self forKeyPath:@"URL"];
     [w stopLoading];
@@ -671,6 +806,9 @@ static NSString *EchoTime(float s) {
 
 - (WKWebView *)webView:(WKWebView *)wv createWebViewWithConfiguration:(WKWebViewConfiguration *)cfg
    forNavigationAction:(WKNavigationAction *)a windowFeatures:(WKWindowFeatures *)f {
+    // أثناء التنزيل التلقائي نتجاهل نوافذ الإعلانات المنبثقة
+    if (wv == self.autoWeb && self.autoStep < 3 &&
+        ![a.request.URL.host isEqualToString:[NSURL URLWithString:kConverterURL].host]) return nil;
     if (a.targetFrame == nil || !a.targetFrame.isMainFrame) {
         if (a.request.URL) {
             [wv loadRequest:a.request];
@@ -764,10 +902,12 @@ static NSString *EchoTime(float s) {
 
 - (void)webView:(WKWebView *)wv navigationAction:(WKNavigationAction *)a didBecomeDownload:(id)d {
     [d setDelegate:self];
+    [self stopAuto];
     self.status.text = @"⏳ بدأ التنزيل…";
 }
 - (void)webView:(WKWebView *)wv navigationResponse:(WKNavigationResponse *)r didBecomeDownload:(id)d {
     [d setDelegate:self];
+    [self stopAuto];
     self.status.text = @"⏳ بدأ التنزيل…";
 }
 
@@ -814,7 +954,7 @@ static NSString *EchoTime(float s) {
         NSString *video = self.pendingVideo;
         self.pendingVideo = nil;
         self.pendingWeb = nil;
-        [self fillConverter:wv video:video];
+        [self startAuto:wv video:video];
     }
 }
 
