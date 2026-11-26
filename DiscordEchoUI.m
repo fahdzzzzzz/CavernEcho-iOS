@@ -342,7 +342,7 @@ static NSString *EchoTime(float s) {
 }
 @end
 
-#pragma mark - متصفح داخلي
+#pragma mark - متصفح داخلي (مع حفظ الروابط الحالية لكل نافذة وتحديثها تلقائياً)
 
 @interface EchoBrowserController : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
 @property (nonatomic, copy) void (^onPick)(NSURL *fileURL, NSString *name);
@@ -1335,90 +1335,10 @@ static CIImage *paint_apply(CIImage *img, const EchoFace *f) {
 enum { SHAPE_EYES = 0, SHAPE_MOUTH, SHAPE_NOSE, SHAPE_CHIN, SHAPE_FACE, SHAPE_COUNT };
 static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم", @"الأنف", @"الذقن", @"الوجه (نحيف ↔ منفوخ)" };
 
-#pragma mark - محرك مؤثرات خارجي مدمج
+#pragma mark - واجهة ربط مكتبة العدسات الخارجية
 
 @protocol EchoExternalLensEngine <NSObject>
 - (nullable CVPixelBufferRef)processPixelBuffer:(CVPixelBufferRef)pixelBuffer lensId:(NSString *)lensId;
-@end
-
-// محرك افتراضي جاهز يطبق مكتبة عدسات خارجية مباشرة على CVPixelBufferRef بدون أي اعتماد ناقص
-@interface EchoBuiltInLensLibraryEngine : NSObject <EchoExternalLensEngine>
-@property (nonatomic, strong) CIContext *ctx;
-@end
-
-@implementation EchoBuiltInLensLibraryEngine
-- (instancetype)init {
-    if ((self = [super init])) {
-        _ctx = [CIContext contextWithOptions:nil];
-    }
-    return self;
-}
-
-- (nullable CVPixelBufferRef)processPixelBuffer:(CVPixelBufferRef)pixelBuffer lensId:(NSString *)lensId {
-    if (!pixelBuffer || lensId.length == 0 || [lensId isEqualToString:@"none"]) return NULL;
-    CIImage *img = [CIImage imageWithCVPixelBuffer:pixelBuffer];
-    CGRect ext = img.extent;
-    CIImage *out = img;
-
-    if ([lensId isEqualToString:@"neon_cyber"]) {
-        out = [img imageByApplyingFilter:@"CIColorControls" withInputParameters:@{
-            kCIInputSaturationKey: @1.65,
-            kCIInputContrastKey: @1.25,
-            kCIInputBrightnessKey: @0.02
-        }];
-        CIImage *bloom = [[out imageByClampingToExtent] imageByApplyingFilter:@"CIBloom" withInputParameters:@{
-            kCIInputRadiusKey: @8.0,
-            kCIInputIntensityKey: @0.65
-        }];
-        out = [[bloom imageByCompositingOverImage:out] imageByCroppingToRect:ext];
-    } else if ([lensId isEqualToString:@"retro_vhs"]) {
-        out = [[img imageByClampingToExtent] imageByApplyingFilter:@"CIPixellate" withInputParameters:@{
-            kCIInputScaleKey: @(MAX(4.0, ext.size.width / 140.0))
-        }];
-        out = [out imageByApplyingFilter:@"CIPhotoEffectTransfer" withInputParameters:nil];
-        out = [out imageByCroppingToRect:ext];
-    } else if ([lensId isEqualToString:@"warm_glow"]) {
-        CIImage *warm = [img imageByApplyingFilter:@"CITemperatureAndTint" withInputParameters:@{
-            @"inputNeutral": [CIVector vectorWithX:6500 Y:0],
-            @"inputTargetNeutral": [CIVector vectorWithX:4200 Y:120]
-        }];
-        CIImage *soft = [[warm imageByClampingToExtent] imageByApplyingFilter:@"CIGaussianBlur" withInputParameters:@{
-            kCIInputRadiusKey: @(MAX(3.0, ext.size.width / 180.0))
-        }];
-        out = [[soft imageByCompositingOverImage:warm] imageByCroppingToRect:ext];
-    } else if ([lensId isEqualToString:@"comic_pop"]) {
-        out = [img imageByApplyingFilter:@"CIComicEffect" withInputParameters:nil];
-        out = [out imageByApplyingFilter:@"CIColorControls" withInputParameters:@{
-            kCIInputSaturationKey: @1.35,
-            kCIInputContrastKey: @1.15
-        }];
-        out = [out imageByCroppingToRect:ext];
-    } else if ([lensId isEqualToString:@"thermal_heat"]) {
-        out = [img imageByApplyingFilter:@"CIFalseColor" withInputParameters:@{
-            @"inputColor0": [CIColor colorWithRed:0.05 green:0.05 blue:0.35 alpha:1.0],
-            @"inputColor1": [CIColor colorWithRed:1.0 green:0.85 blue:0.1 alpha:1.0]
-        }];
-        out = [out imageByCroppingToRect:ext];
-    }
-
-    size_t w = CVPixelBufferGetWidth(pixelBuffer);
-    size_t h = CVPixelBufferGetHeight(pixelBuffer);
-    OSType fmt = CVPixelBufferGetPixelFormatType(pixelBuffer);
-    CVPixelBufferRef dst = NULL;
-    NSDictionary *attrs = @{
-        (id)kCVPixelBufferPixelFormatTypeKey: @(fmt),
-        (id)kCVPixelBufferWidthKey: @(w),
-        (id)kCVPixelBufferHeightKey: @(h),
-        (id)kCVPixelBufferIOSurfacePropertiesKey: @{}
-    };
-    if (CVPixelBufferPoolCreate(NULL, NULL, (__bridge CFDictionaryRef)attrs, &dst) != kCVReturnSuccess) {
-        CVPixelBufferCreate(kCFAllocatorDefault, w, h, fmt, (__bridge CFDictionaryRef)attrs, &dst);
-    }
-    if (!dst) return NULL;
-    CVBufferPropagateAttachments(pixelBuffer, dst);
-    [_ctx render:out toCVPixelBuffer:dst];
-    return dst;
-}
 @end
 
 @interface EchoCam : NSObject
@@ -1462,14 +1382,6 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     BOOL _haveFace;
     CFTimeInterval _faceTime;
     int _searchTurn;
-}
-
-- (instancetype)init {
-    if ((self = [super init])) {
-        _externalEngine = [EchoBuiltInLensLibraryEngine new];
-        _activeExternalLensId = @"none";
-    }
-    return self;
 }
 
 - (void)setShape:(int)index value:(int)v {
@@ -1842,10 +1754,10 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
         if (!_ci) _ci = [CIContext contextWithOptions:nil];
         [_ci render:img toCVPixelBuffer:dst];
 
-        if (self.externalEngine && self.activeExternalLensId.length > 0 && ![self.activeExternalLensId isEqualToString:@"none"]) {
+        if (self.externalEngine && self.activeExternalLensId.length > 0) {
             CVPixelBufferRef extBuf = [self.externalEngine processPixelBuffer:dst lensId:self.activeExternalLensId];
             if (extBuf) {
-                CVPixelBufferRelease(dst);
+                CFRelease(dst);
                 dst = extBuf;
             }
         }
@@ -1858,7 +1770,7 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
             CMSampleBufferCreateReadyWithImageBuffer(NULL, dst, desc, &timing, &out);
         }
         if (desc) CFRelease(desc);
-        if (dst) CVPixelBufferRelease(dst);
+        CVPixelBufferRelease(dst);
         return out;
     }
 }
@@ -1884,7 +1796,7 @@ static void echo_cam_hook_class(Class cls) {
             if (![output isKindOfClass:AVCaptureVideoDataOutput.class]) { orig(me, sel, output, sb, conn); return; }
             EchoCam *cam = [EchoCam shared];
             cam.frames = cam.frames + 1;
-            BOOL hasExt = (cam.externalEngine != nil && cam.activeExternalLensId.length > 0 && ![cam.activeExternalLensId isEqualToString:@"none"]);
+            BOOL hasExt = (cam.externalEngine != nil && cam.activeExternalLensId.length > 0);
             if (cam.mode == CAM_LIVE && cam.filter == 0 && cam.effect == 0 && cam.liveFlip == 0 && ![cam hasShape] && !hasExt) { orig(me, sel, output, sb, conn); return; }
             @autoreleasepool {
                 CMSampleBufferRef out = [cam copyProcessed:sb];
@@ -1947,7 +1859,6 @@ static void echo_cam_install(void) {
 @property (nonatomic, strong) UILabel *camSource;
 @property (nonatomic, strong) NSArray<UIButton *> *camFilterBtns;
 @property (nonatomic, strong) NSArray<UIButton *> *camFxBtns;
-@property (nonatomic, strong) NSArray<UIButton *> *extLensBtns;
 @property (nonatomic, strong) NSArray<UISlider *> *shapeSliders;
 @property (nonatomic, strong) NSArray<UILabel *> *shapeLabels;
 @property (nonatomic) BOOL pickingMask;
@@ -2283,17 +2194,6 @@ static void echo_cam_install(void) {
 
 #pragma mark - تبويب الكاميرا
 
-- (NSArray<NSDictionary *> *)externalLensCatalog {
-    return @[
-        @{ @"title": @"إيقاف",      @"id": @"none" },
-        @{ @"title": @"⚡ نيون",     @"id": @"neon_cyber" },
-        @{ @"title": @"📼 VHS",      @"id": @"retro_vhs" },
-        @{ @"title": @"☀️ توهج",     @"id": @"warm_glow" },
-        @{ @"title": @"💥 كوميك",   @"id": @"comic_pop" },
-        @{ @"title": @"🔥 حراري",    @"id": @"thermal_heat" }
-    ];
-}
-
 - (void)buildCamTab:(UIScrollView *)tab {
     CGFloat w = kPanelW - 32, y = 4;
     self.camStatus = [self makeLabelAt:CGRectMake(16, y, w, 20) size:13 bold:YES alpha:1];
@@ -2303,19 +2203,6 @@ static void echo_cam_install(void) {
     CGFloat bw = (w - 16) / 3.0;
     [tab addSubview:[self makeButton:@"⇋ عكس الكاميرا: طافي" frame:CGRectMake(16, y, w, 36) tag:0 action:@selector(camLiveFlip:)]];
     y += 44;
-
-    y = [self addHeader:@"🔌 مكتبة مؤثرات خارجية" to:tab y:y];
-    NSArray<NSDictionary *> *extCatalog = [self externalLensCatalog];
-    NSMutableArray *extBtns = [NSMutableArray array];
-    for (NSInteger i = 0; i < (NSInteger)extCatalog.count; i++) {
-        UIButton *b = [self makeButton:extCatalog[i][@"title"]
-                                 frame:CGRectMake(16 + (i % 3) * (bw + 8), y + (i / 3) * 40, bw, 32)
-                                   tag:i action:@selector(extLensTapped:)];
-        [tab addSubview:b];
-        [extBtns addObject:b];
-    }
-    self.extLensBtns = extBtns;
-    y += ((extCatalog.count + 2) / 3) * 40 + 6;
 
     y = [self addHeader:@"🧬 غيّر ملامحك" to:tab y:y];
     NSMutableArray *sliders = [NSMutableArray array];
@@ -2382,13 +2269,6 @@ static void echo_cam_install(void) {
     [self refreshCamStatus];
 }
 
-- (void)extLensTapped:(UIButton *)b {
-    NSArray<NSDictionary *> *catalog = [self externalLensCatalog];
-    if (b.tag < 0 || b.tag >= (NSInteger)catalog.count) return;
-    [EchoCam shared].activeExternalLensId = catalog[b.tag][@"id"];
-    [self refreshCamButtons];
-}
-
 - (void)shapeChanged:(UISlider *)sl {
     int v = (int)lroundf(sl.value);
     if (abs(v) < 6) v = 0;
@@ -2431,13 +2311,6 @@ static void echo_cam_install(void) {
     for (UIButton *b in self.camFilterBtns) {
         b.backgroundColor = (b.tag == f) ? [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95]
                                          : [UIColor colorWithWhite:1 alpha:0.14];
-    }
-    NSString *activeExt = [EchoCam shared].activeExternalLensId ?: @"none";
-    NSArray<NSDictionary *> *catalog = [self externalLensCatalog];
-    for (UIButton *b in self.extLensBtns) {
-        BOOL sel = (b.tag >= 0 && b.tag < (NSInteger)catalog.count) && [catalog[b.tag][@"id"] isEqualToString:activeExt];
-        b.backgroundColor = sel ? [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95]
-                                : [UIColor colorWithWhite:1 alpha:0.14];
     }
 }
 
@@ -2895,7 +2768,7 @@ static void echo_ui_init(void) {
         echo_setup_window();
         echo_monitor_sync();
     }];
-
+    
     [nc addObserverForName:AVAudioSessionRouteChangeNotification
                     object:nil
                      queue:[NSOperationQueue mainQueue]
