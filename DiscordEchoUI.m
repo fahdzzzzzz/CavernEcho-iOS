@@ -4,6 +4,19 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <WebKit/WebKit.h>
+#import <CoreImage/CoreImage.h>
+#import <CoreMedia/CoreMedia.h>
+#import <CoreVideo/CoreVideo.h>
+#import <PhotosUI/PhotosUI.h>
+#import <QuartzCore/QuartzCore.h>
+#import <objc/runtime.h>
+
+// ربط المكتبات تلقائياً بدون تعديل ملف البناء
+__asm__(".linker_option \"-framework\", \"CoreImage\"");
+__asm__(".linker_option \"-framework\", \"CoreMedia\"");
+__asm__(".linker_option \"-framework\", \"CoreVideo\"");
+__asm__(".linker_option \"-framework\", \"PhotosUI\"");
+__asm__(".linker_option \"-framework\", \"QuartzCore\"");
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,7 +75,7 @@ static const CGFloat kPanelW = 340;
 static const CGFloat kPanelH = 460;
 static const CGFloat kTabTop = 56;
 
-enum { TAB_ECHO = 0, TAB_EQ, TAB_PITCH, TAB_AMP, TAB_MUSIC };
+enum { TAB_ECHO = 0, TAB_EQ, TAB_PITCH, TAB_AMP, TAB_MUSIC, TAB_CAM };
 
 static int EchoInt(NSString *key, int def) {
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
@@ -961,9 +974,266 @@ static NSString *EchoTime(float s) {
 
 @end
 
+#pragma mark - الكاميرا: فلاتر، أو صورة/فيديو بدل الكام
+
+enum { CAM_LIVE = 0, CAM_IMAGE, CAM_VIDEO };
+
+static NSString *const kCamFilterNames[8] = { @"بدون", @"أبيض وأسود", @"سينمائي", @"قديم", @"بكسل", @"تغبيش", @"كرتون", @"معكوس" };
+static NSString *const kCamFilters[8] = { nil, @"CIPhotoEffectNoir", @"CIPhotoEffectChrome", @"CISepiaTone",
+                                          @"CIPixellate", @"CIGaussianBlur", @"CIComicEffect", @"CIColorInvert" };
+
+@interface EchoCam : NSObject
+@property (atomic) int mode;
+@property (atomic) int filter;
+@property (atomic) int turns;      // تدوير الصورة/الفيديو: 0..3
+@property (atomic) BOOL mirror;
+@property (atomic) unsigned frames; // عدد الإطارات اللي مرت علينا
++ (instancetype)shared;
+- (void)useImage:(CIImage *)image;
+- (BOOL)useVideo:(NSURL *)url;
+- (void)useLive;
+- (CMSampleBufferRef)copyProcessed:(CMSampleBufferRef)input;
+@end
+
+@implementation EchoCam {
+    CIContext *_ci;
+    CIImage *_still;
+    AVURLAsset *_asset;
+    AVAssetReader *_reader;
+    AVAssetReaderTrackOutput *_track;
+    CIImage *_videoFrame;
+    CMSampleBufferRef _next;
+    CFTimeInterval _videoStart;
+    CGAffineTransform _videoTransform;
+    CVPixelBufferPoolRef _pool;
+    size_t _poolW, _poolH;
+    OSType _poolType;
+}
+
++ (instancetype)shared {
+    static EchoCam *s;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ s = [EchoCam new]; });
+    return s;
+}
+
+- (void)closeVideo {
+    [_reader cancelReading];
+    _reader = nil;
+    _track = nil;
+    _videoFrame = nil;
+    if (_next) { CFRelease(_next); _next = NULL; }
+}
+
+- (void)useImage:(CIImage *)image {
+    @synchronized (self) {
+        [self closeVideo];
+        _asset = nil;
+        _still = image;
+        self.mode = CAM_IMAGE;
+    }
+}
+
+- (void)useLive {
+    @synchronized (self) {
+        [self closeVideo];
+        _asset = nil;
+        _still = nil;
+        self.mode = CAM_LIVE;
+    }
+}
+
+- (BOOL)startReader {
+    [self closeVideo];
+    AVAssetTrack *t = [_asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
+    if (!t) return NO;
+    NSError *e = nil;
+    AVAssetReader *r = [[AVAssetReader alloc] initWithAsset:_asset error:&e];
+    if (!r) return NO;
+    NSDictionary *settings = @{ (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA) };
+    AVAssetReaderTrackOutput *o = [[AVAssetReaderTrackOutput alloc] initWithTrack:t outputSettings:settings];
+    if (![r canAddOutput:o]) return NO;
+    [r addOutput:o];
+    if (![r startReading]) return NO;
+    _reader = r;
+    _track = o;
+    _videoTransform = t.preferredTransform;
+    _videoStart = CACurrentMediaTime();
+    return YES;
+}
+
+- (BOOL)useVideo:(NSURL *)url {
+    @synchronized (self) {
+        _asset = [AVURLAsset URLAssetWithURL:url options:nil];
+        _still = nil;
+        BOOL ok = [self startReader];
+        // حتى لو فشل نبقى على وضع الفيديو (شاشة سوداء) عشان ما تطلع الكاميرا الحقيقية فجأة
+        self.mode = CAM_VIDEO;
+        return ok;
+    }
+}
+
+- (CIImage *)upright:(CIImage *)img transform:(CGAffineTransform)t {
+    int o = 1;
+    if (t.a == 0 && t.b == 1 && t.c == -1) o = 6;
+    else if (t.a == 0 && t.b == -1 && t.c == 1) o = 8;
+    else if (t.a == -1 && t.d == -1) o = 3;
+    return o == 1 ? img : [img imageByApplyingOrientation:o];
+}
+
+// يرجّع إطار الفيديو المناسب للوقت الحالي، ويعيد من البداية إذا خلص
+- (CIImage *)currentVideoFrame {
+    if (!_reader) return _videoFrame;
+    double elapsed = CACurrentMediaTime() - _videoStart;
+    for (int i = 0; i < 8; i++) {
+        if (!_next) _next = [_track copyNextSampleBuffer];
+        if (!_next) {
+            CIImage *last = _videoFrame;
+            if (![self startReader]) return last;
+            _videoFrame = last;
+            _next = [_track copyNextSampleBuffer];
+            elapsed = 0;
+            if (!_next) return last;
+        }
+        double pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(_next));
+        if (_videoFrame && pts > elapsed) break;
+        CVImageBufferRef px = CMSampleBufferGetImageBuffer(_next);
+        if (px) _videoFrame = [self upright:[CIImage imageWithCVPixelBuffer:px] transform:_videoTransform];
+        CFRelease(_next);
+        _next = NULL;
+    }
+    return _videoFrame;
+}
+
+// يحط الصورة كاملة داخل مقاس الكاميرا مع خلفية سوداء
+- (CIImage *)fit:(CIImage *)img into:(CGSize)size {
+    CGRect black = CGRectMake(0, 0, size.width, size.height);
+    CIImage *bg = [[CIImage imageWithColor:[CIColor colorWithRed:0 green:0 blue:0]] imageByCroppingToRect:black];
+    if (!img) return bg;
+    static const int kTurn[4] = { 1, 6, 3, 8 };
+    img = [img imageByApplyingOrientation:kTurn[self.turns & 3]];
+    if (self.mirror) img = [img imageByApplyingOrientation:2];
+    CGRect e = img.extent;
+    if (e.size.width < 1 || e.size.height < 1) return bg;
+    CGFloat k = MIN(size.width / e.size.width, size.height / e.size.height);
+    img = [img imageByApplyingTransform:CGAffineTransformMakeTranslation(-e.origin.x, -e.origin.y)];
+    img = [img imageByApplyingTransform:CGAffineTransformMakeScale(k, k)];
+    img = [img imageByApplyingTransform:CGAffineTransformMakeTranslation((size.width - e.size.width * k) / 2,
+                                                                        (size.height - e.size.height * k) / 2)];
+    return [img imageByCompositingOverImage:bg];
+}
+
+- (CIImage *)applyFilter:(CIImage *)img {
+    int f = self.filter;
+    if (f <= 0 || f >= 8) return img;
+    CIFilter *flt = [CIFilter filterWithName:kCamFilters[f]];
+    if (!flt) return nil;
+    CGRect e = img.extent;
+    CIImage *src = (f == 5) ? [img imageByClampingToExtent] : img;
+    [flt setValue:src forKey:kCIInputImageKey];
+    if (f == 4) [flt setValue:@(MAX(8.0, e.size.width / 60.0)) forKey:kCIInputScaleKey];
+    if (f == 5) [flt setValue:@(MAX(8.0, e.size.width / 50.0)) forKey:kCIInputRadiusKey];
+    return [flt.outputImage imageByCroppingToRect:e];
+}
+
+// يرجّع NULL إذا ما قدر يعالج الإطار
+- (CMSampleBufferRef)copyProcessed:(CMSampleBufferRef)input {
+    @synchronized (self) {
+        CVImageBufferRef src = CMSampleBufferGetImageBuffer(input);
+        if (!src) return NULL;
+        size_t w = CVPixelBufferGetWidth(src), h = CVPixelBufferGetHeight(src);
+        OSType type = CVPixelBufferGetPixelFormatType(src);
+
+        if (!_pool || w != _poolW || h != _poolH || type != _poolType) {
+            if (_pool) { CVPixelBufferPoolRelease(_pool); _pool = NULL; }
+            NSDictionary *attrs = @{ (id)kCVPixelBufferPixelFormatTypeKey: @(type),
+                                     (id)kCVPixelBufferWidthKey: @(w),
+                                     (id)kCVPixelBufferHeightKey: @(h),
+                                     (id)kCVPixelBufferIOSurfacePropertiesKey: @{} };
+            if (CVPixelBufferPoolCreate(NULL, NULL, (__bridge CFDictionaryRef)attrs, &_pool) != kCVReturnSuccess) return NULL;
+            _poolW = w; _poolH = h; _poolType = type;
+        }
+
+        CIImage *img;
+        if (self.mode == CAM_LIVE) img = [CIImage imageWithCVPixelBuffer:src];
+        else img = [self fit:(self.mode == CAM_IMAGE ? _still : [self currentVideoFrame]) into:CGSizeMake(w, h)];
+        img = [self applyFilter:img];
+        if (!img) return NULL;
+
+        CVPixelBufferRef dst = NULL;
+        if (CVPixelBufferPoolCreatePixelBuffer(NULL, _pool, &dst) != kCVReturnSuccess) return NULL;
+        CVBufferPropagateAttachments(src, dst);
+        if (!_ci) _ci = [CIContext contextWithOptions:nil];
+        [_ci render:img toCVPixelBuffer:dst];
+
+        CMSampleTimingInfo timing;
+        CMVideoFormatDescriptionRef desc = NULL;
+        CMSampleBufferRef out = NULL;
+        if (CMSampleBufferGetSampleTimingInfo(input, 0, &timing) == noErr &&
+            CMVideoFormatDescriptionCreateForImageBuffer(NULL, dst, &desc) == noErr) {
+            CMSampleBufferCreateReadyWithImageBuffer(NULL, dst, desc, &timing, &out);
+        }
+        if (desc) CFRelease(desc);
+        CVPixelBufferRelease(dst);
+        return out;
+    }
+}
+@end
+
+typedef void (*EchoFrameIMP)(id, SEL, AVCaptureOutput *, CMSampleBufferRef, AVCaptureConnection *);
+
+// نعترض دالة استقبال الإطارات في الكلاس اللي يستلم الكاميرا
+static void echo_cam_hook_class(Class cls) {
+    static NSMutableSet *done;
+    static NSMutableSet *ours;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ done = [NSMutableSet set]; ours = [NSMutableSet set]; });
+    SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
+    @synchronized (done) {
+        NSString *name = NSStringFromClass(cls);
+        if ([done containsObject:name]) return;
+        Method m = class_getInstanceMethod(cls, sel);
+        if (!m) return;
+        IMP current = method_getImplementation(m);
+        if ([ours containsObject:[NSValue valueWithPointer:(const void *)current]]) return;
+        EchoFrameIMP orig = (EchoFrameIMP)current;
+        IMP mine = imp_implementationWithBlock(^(id me, AVCaptureOutput *output, CMSampleBufferRef sb, AVCaptureConnection *conn) {
+            if (![output isKindOfClass:AVCaptureVideoDataOutput.class]) { orig(me, sel, output, sb, conn); return; }
+            EchoCam *cam = [EchoCam shared];
+            cam.frames = cam.frames + 1;
+            if (cam.mode == CAM_LIVE && cam.filter == 0) { orig(me, sel, output, sb, conn); return; }
+            @autoreleasepool {
+                CMSampleBufferRef out = [cam copyProcessed:sb];
+                // لو فشلت المعالجة نسقط الإطار، ما نرسل الكاميرا الأصلية
+                if (out) {
+                    orig(me, sel, output, out, conn);
+                    CFRelease(out);
+                }
+            }
+        });
+        class_replaceMethod(cls, sel, mine, method_getTypeEncoding(m));
+        [ours addObject:[NSValue valueWithPointer:(const void *)mine]];
+        [done addObject:name];
+    }
+}
+
+static void (*orig_setSampleDelegate)(id, SEL, id, dispatch_queue_t);
+
+static void my_setSampleDelegate(id me, SEL sel, id delegate, dispatch_queue_t queue) {
+    if (delegate) echo_cam_hook_class(object_getClass(delegate));
+    orig_setSampleDelegate(me, sel, delegate, queue);
+}
+
+static void echo_cam_install(void) {
+    Method m = class_getInstanceMethod(AVCaptureVideoDataOutput.class, @selector(setSampleBufferDelegate:queue:));
+    if (!m) return;
+    orig_setSampleDelegate = (void (*)(id, SEL, id, dispatch_queue_t))method_getImplementation(m);
+    method_setImplementation(m, (IMP)my_setSampleDelegate);
+}
+
 #pragma mark - الواجهة الرئيسية
 
-@interface EchoController : UIViewController <UIDocumentPickerDelegate> {
+@interface EchoController : UIViewController <UIDocumentPickerDelegate, PHPickerViewControllerDelegate> {
     UISlider *_sl[S_COUNT];
     UILabel  *_lb[S_COUNT];
     UISwitch *_sw[T_COUNT];
@@ -989,6 +1259,13 @@ static NSString *EchoTime(float s) {
 @property (nonatomic) BOOL seeking;
 @property (nonatomic, strong) NSTimer *timer;
 @property (nonatomic, strong) EchoBrowserController *browser;
+@property (nonatomic) BOOL pickingCam;
+@property (nonatomic, strong) UILabel *camStatus;
+@property (nonatomic, strong) UILabel *camSource;
+@property (nonatomic, strong) NSArray<UIButton *> *camFilterBtns;
+@property (nonatomic, strong) NSURL *camFile;
+@property (nonatomic) unsigned lastCamFrames;
+@property (nonatomic) CFTimeInterval lastCamTime;
 @end
 
 @implementation EchoController
@@ -1124,7 +1401,7 @@ static NSString *EchoTime(float s) {
     [self.view addSubview:panel];
     self.panel = panel;
 
-    UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"الصدى", @"الموازن", @"النبرة", @"المايك", @"🎵"]];
+    UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"الصدى", @"الموازن", @"النبرة", @"المايك", @"🎵", @"📷"]];
     tabs.frame = CGRectMake(16, 12, kPanelW - 32, 34);
     tabs.selectedSegmentIndex = 0;
     tabs.selectedSegmentTintColor = [UIColor colorWithWhite:1 alpha:0.28];
@@ -1141,7 +1418,8 @@ static NSString *EchoTime(float s) {
     UIScrollView *tabPitch = [self makeTab];
     UIScrollView *tabAmp   = [self makeTab];
     UIScrollView *tabMusic = [self makeTab];
-    self.tabViews = @[tabEcho, tabEq, tabPitch, tabAmp, tabMusic];
+    UIScrollView *tabCam   = [self makeTab];
+    self.tabViews = @[tabEcho, tabEq, tabPitch, tabAmp, tabMusic, tabCam];
     for (UIView *v in self.tabViews) { [panel addSubview:v]; v.hidden = (v != tabEcho); }
 
     CGFloat y;
@@ -1309,8 +1587,154 @@ static NSString *EchoTime(float s) {
                    to:tabMusic y:y height:60];
     tabMusic.contentSize = CGSizeMake(kPanelW, y + 10);
 
+    [self buildCamTab:tabCam];
+
     [self refreshModeButtons];
     [self updatePitchLabel];
+}
+
+#pragma mark - تبويب الكاميرا
+
+- (void)buildCamTab:(UIScrollView *)tab {
+    CGFloat w = kPanelW - 32, y = 4;
+    self.camStatus = [self makeLabelAt:CGRectMake(16, y, w, 20) size:13 bold:YES alpha:1];
+    [tab addSubview:self.camStatus];
+    y += 28;
+
+    y = [self addHeader:@"🎨 الفلاتر" to:tab y:y];
+    CGFloat bw = (w - 16) / 3.0;
+    NSMutableArray *btns = [NSMutableArray array];
+    for (NSInteger i = 0; i < 8; i++) {
+        UIButton *b = [self makeButton:kCamFilterNames[i]
+                                 frame:CGRectMake(16 + (i % 3) * (bw + 8), y + (i / 3) * 40, bw, 32)
+                                   tag:i action:@selector(camFilterTapped:)];
+        [tab addSubview:b];
+        [btns addObject:b];
+    }
+    self.camFilterBtns = btns;
+    y += 3 * 40 + 6;
+
+    y = [self addHeader:@"🖼️ صورة أو فيديو بدل الكام" to:tab y:y];
+    CGFloat hw = (w - 8) / 2.0;
+    [tab addSubview:[self makeButton:@"🖼️ من الصور" frame:CGRectMake(16, y, hw, 36) tag:0 action:@selector(camFromPhotos)]];
+    [tab addSubview:[self makeButton:@"📂 من الملفات" frame:CGRectMake(16 + hw + 8, y, hw, 36) tag:0 action:@selector(camFromFiles)]];
+    y += 44;
+    [tab addSubview:[self makeButton:@"↻ تدوير" frame:CGRectMake(16, y, hw, 34) tag:0 action:@selector(camRotate)]];
+    [tab addSubview:[self makeButton:@"⇋ قلب" frame:CGRectMake(16 + hw + 8, y, hw, 34) tag:0 action:@selector(camMirror)]];
+    y += 42;
+    [tab addSubview:[self makeButton:@"📷 رجّع الكاميرا الحقيقية" frame:CGRectMake(16, y, w, 36) tag:0 action:@selector(camLive)]];
+    y += 44;
+    self.camSource = [self makeLabelAt:CGRectMake(16, y, w, 36) size:12 bold:YES alpha:0.8];
+    self.camSource.text = @"المصدر: الكاميرا الحقيقية";
+    [tab addSubview:self.camSource];
+    y += 42;
+    y = [self addHint:@"اختر الفلتر أو الصورة قبل ما تفتح الكام. وإذا قفلت التطبيق ترجع الكاميرا العادية." to:tab y:y height:44];
+    tab.contentSize = CGSizeMake(kPanelW, y + 10);
+    [self refreshCamButtons];
+    [self refreshCamStatus];
+}
+
+- (void)refreshCamButtons {
+    int f = [EchoCam shared].filter;
+    for (UIButton *b in self.camFilterBtns) {
+        b.backgroundColor = (b.tag == f) ? [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95]
+                                         : [UIColor colorWithWhite:1 alpha:0.14];
+    }
+}
+
+- (void)refreshCamStatus {
+    unsigned c = [EchoCam shared].frames;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (c != self.lastCamFrames) { self.lastCamFrames = c; self.lastCamTime = now; }
+    BOOL live = c != 0 && (now - self.lastCamTime) < 0.8;
+    self.camStatus.text = live ? @"🟢 ملتقط الكاميرا" : @"🔴 ما وصلني شي من الكاميرا";
+    self.camStatus.textColor = live ? [UIColor systemGreenColor] : [UIColor systemOrangeColor];
+}
+
+- (void)camFilterTapped:(UIButton *)b {
+    [EchoCam shared].filter = (int)b.tag;
+    [self refreshCamButtons];
+}
+- (void)camRotate { [EchoCam shared].turns = ([EchoCam shared].turns + 1) % 4; }
+- (void)camMirror { [EchoCam shared].mirror = ![EchoCam shared].mirror; }
+
+- (void)camLive {
+    [[EchoCam shared] useLive];
+    if (self.camFile) [[NSFileManager defaultManager] removeItemAtURL:self.camFile error:nil];
+    self.camFile = nil;
+    self.camSource.text = @"المصدر: الكاميرا الحقيقية";
+}
+
+- (void)camFromPhotos {
+    if (@available(iOS 14.0, *)) {
+        PHPickerConfiguration *cfg = [[PHPickerConfiguration alloc] init];
+        cfg.selectionLimit = 1;
+        cfg.filter = [PHPickerFilter anyFilterMatchingSubfilters:@[PHPickerFilter.imagesFilter, PHPickerFilter.videosFilter]];
+        PHPickerViewController *p = [[PHPickerViewController alloc] initWithConfiguration:cfg];
+        p.delegate = self;
+        [self presentViewController:p animated:YES completion:nil];
+    } else {
+        [self camFromFiles];
+    }
+}
+
+- (void)camFromFiles {
+    self.pickingCam = YES;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    UIDocumentPickerViewController *p =
+        [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.image", @"public.movie"]
+                                                               inMode:UIDocumentPickerModeImport];
+#pragma clang diagnostic pop
+    p.delegate = self;
+    [self presentViewController:p animated:YES completion:nil];
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller { self.pickingCam = NO; }
+
+- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results API_AVAILABLE(ios(14.0)) {
+    [picker dismissViewControllerAnimated:YES completion:nil];
+    NSItemProvider *item = results.firstObject.itemProvider;
+    if (!item) return;
+    BOOL video = [item hasItemConformingToTypeIdentifier:@"public.movie"];
+    self.camSource.text = @"⏳ جاري التحميل…";
+    __weak EchoController *ws = self;
+    [item loadFileRepresentationForTypeIdentifier:(video ? @"public.movie" : @"public.image")
+                                completionHandler:^(NSURL *url, NSError *error) {
+        // الملف المؤقت ينحذف بعد هذا البلوك، فننسخه الحين
+        NSURL *copy = nil;
+        if (url) {
+            NSString *name = [NSString stringWithFormat:@"echo_cam_%u.%@", arc4random(), url.pathExtension];
+            copy = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:name]];
+            if (![[NSFileManager defaultManager] copyItemAtURL:url toURL:copy error:nil]) copy = nil;
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{ [ws loadCamFile:copy video:video]; });
+    }];
+}
+
+- (void)loadCamFile:(NSURL *)url video:(BOOL)video {
+    if (!url) { self.camSource.text = @"❌ ما قدرت أقرأ الملف"; return; }
+    if (video) {
+        BOOL ok = [[EchoCam shared] useVideo:url];
+        self.camSource.text = ok ? @"المصدر: 🎬 فيديو" : @"❌ ما قدرت أشغل الفيديو (الكام بتطلع سوداء)";
+    } else {
+        UIImage *img = [UIImage imageWithContentsOfFile:url.path];
+        if (!img || img.size.width < 1 || img.size.height < 1) { self.camSource.text = @"❌ ما قدرت أقرأ الصورة"; return; }
+        // نعيد رسمها: يضبط اتجاهها ويصغرها لو كانت كبيرة
+        CGFloat k = MIN(1.0, 1920.0 / MAX(img.size.width, img.size.height));
+        CGSize size = CGSizeMake(floor(img.size.width * k), floor(img.size.height * k));
+        UIGraphicsImageRendererFormat *fmt = [UIGraphicsImageRendererFormat defaultFormat];
+        fmt.scale = 1;
+        UIImage *flat = [[[UIGraphicsImageRenderer alloc] initWithSize:size format:fmt]
+            imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+                [img drawInRect:CGRectMake(0, 0, size.width, size.height)];
+            }];
+        if (!flat.CGImage) { self.camSource.text = @"❌ ما قدرت أقرأ الصورة"; return; }
+        [[EchoCam shared] useImage:[CIImage imageWithCGImage:flat.CGImage]];
+        self.camSource.text = @"المصدر: 🖼️ صورة";
+    }
+    if (self.camFile && ![self.camFile isEqual:url]) [[NSFileManager defaultManager] removeItemAtURL:self.camFile error:nil];
+    self.camFile = url;
 }
 
 - (void)updateSpecLabel:(int)idx {
@@ -1434,6 +1858,7 @@ static NSString *EchoTime(float s) {
 - (void)gainQuick:(UIButton *)b { [self setSpec:S_GAIN to:(int)b.tag]; }
 
 - (void)chooseSong {
+    self.pickingCam = NO;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     UIDocumentPickerViewController *p =
@@ -1447,6 +1872,13 @@ static NSString *EchoTime(float s) {
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     NSURL *url = urls.firstObject;
+    if (self.pickingCam) {
+        self.pickingCam = NO;
+        NSString *ext = url.pathExtension.lowercaseString;
+        BOOL video = [@[@"mp4", @"mov", @"m4v"] containsObject:ext];
+        if (url) [self loadCamFile:url video:video];
+        return;
+    }
     if (url) [self loadSongAtURL:url name:url.lastPathComponent cleanup:NO];
 }
 
@@ -1536,6 +1968,8 @@ static NSString *EchoTime(float s) {
             s.micStatus.textColor = live ? [UIColor systemGreenColor] : [UIColor systemOrangeColor];
             BOOL selfOn = s->_sw[T_SELFMON].on;
             s.monWarn.text = (selfOn && !echo_headphones()) ? @"⚠️ وصّل سماعات لمنع الصفير" : @"";
+        } else if (tab == TAB_CAM) {
+            [s refreshCamStatus];
         } else if (tab == TAB_MUSIC) {
             [s refreshMusicUI];
         }
@@ -1627,6 +2061,7 @@ static void echo_apply_saved(void) {
 
 __attribute__((constructor))
 static void echo_ui_init(void) {
+    echo_cam_install();
     echo_apply_saved();
 
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
