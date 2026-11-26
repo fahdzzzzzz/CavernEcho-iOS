@@ -126,7 +126,11 @@ static float g_win[1025];
 static float g_robot_phase;
 static float g_stail = 0.0f;
 
-void DiscordEcho_ResetAll(void) {
+// الواجهة تطلب التصفير فقط، والتنفيذ داخل خيط الصوت (بدون تعارض بين الخيوط)
+static volatile int g_reset_req = 0;
+void DiscordEcho_ResetAll(void) { g_reset_req = 1; }
+
+static void reset_all_now(void) {
     for (int i = 0; i < NCTX; i++) {
         clear_ctx(i);
         g_cleared[i] = 1;
@@ -495,6 +499,64 @@ static AudioStreamBasicDescription g_fmt;
 static int g_have_fmt;
 static int g_song_cleared = 1;
 
+// ---------- صيغة الصوت: تنقرأ خارج خيط الصوت وتنحفظ هنا ----------
+#define FMT_SLOTS 8
+typedef struct {
+    AudioUnit volatile unit;
+    AudioStreamBasicDescription fmt;
+    volatile unsigned gen;
+} FmtSlot;
+static FmtSlot g_slots[FMT_SLOTS];
+static volatile unsigned g_fmt_gen = 0;
+static unsigned g_cur_gen = 0;
+
+static FmtSlot *fmt_find(AudioUnit unit) {
+    for (int i = 0; i < FMT_SLOTS; i++)
+        if (g_slots[i].unit == unit) return &g_slots[i];
+    return NULL;
+}
+
+static void fmt_forget(AudioUnit unit) {
+    FmtSlot *s = fmt_find(unit);
+    if (s) s->unit = NULL;
+}
+
+static FmtSlot *fmt_cache(AudioUnit unit) {
+    AudioStreamBasicDescription f;
+    UInt32 sz = sizeof(f);
+    if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat,
+                             kAudioUnitScope_Output, 1, &f, &sz) != noErr) return NULL;
+    FmtSlot *s = fmt_find(unit);
+    if (!s) s = fmt_find(NULL);
+    if (!s) s = &g_slots[0];
+    s->unit = NULL;
+    __sync_synchronize();
+    s->fmt = f;
+    s->gen = __sync_add_and_fetch(&g_fmt_gen, 1);
+    __sync_synchronize();
+    s->unit = unit;
+    return s;
+}
+
+static OSStatus (*orig_init)(AudioUnit);
+static OSStatus (*orig_uninit)(AudioUnit);
+static OSStatus (*orig_dispose)(AudioComponentInstance);
+
+static OSStatus my_init(AudioUnit unit) {
+    fmt_forget(unit);
+    OSStatus st = orig_init(unit);
+    if (st == noErr) fmt_cache(unit);
+    return st;
+}
+static OSStatus my_uninit(AudioUnit unit) {
+    fmt_forget(unit);
+    return orig_uninit(unit);
+}
+static OSStatus my_dispose(AudioComponentInstance unit) {
+    fmt_forget(unit);
+    return orig_dispose(unit);
+}
+
 static OSStatus (*orig_render)(AudioUnit, AudioUnitRenderActionFlags *,
                                const AudioTimeStamp *, UInt32, UInt32,
                                AudioBufferList *);
@@ -616,19 +678,23 @@ static OSStatus my_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
     OSStatus st = orig_render(unit, flags, ts, bus, frames, io);
     if (st != noErr || bus != 1 || io == NULL) return st;
 
-    // حماية ضد التعليق عند تغيير الرومات أو إعدادات الهيكل الصوتي
-    UInt32 sz = sizeof(g_fmt);
-    AudioStreamBasicDescription currentFmt;
-    if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat,
-                             kAudioUnitScope_Output, 1, &currentFmt, &sz) == noErr) {
-        if (!g_have_fmt || g_unit != unit || currentFmt.mSampleRate != g_fmt.mSampleRate || currentFmt.mChannelsPerFrame != g_fmt.mChannelsPerFrame) {
-            g_fmt = currentFmt;
-            g_unit = unit;
-            g_have_fmt = 1;
-            DiscordEcho_ResetAll();
-        }
-    } else if (!g_have_fmt) {
-        return st;
+    // نقرأ الصيغة من المخزن. السؤال المباشر يصير مرة وحدة فقط
+    // كاحتياط لو الوحدة تهيأت قبل تركيب الاعتراض.
+    FmtSlot *slot = fmt_find(unit);
+    if (!slot) slot = fmt_cache(unit);
+    if (!slot) return st;
+
+    if (!g_have_fmt || g_unit != unit || g_cur_gen != slot->gen) {
+        g_fmt = slot->fmt;
+        g_unit = unit;
+        g_cur_gen = slot->gen;
+        g_have_fmt = 1;
+        g_reset_req = 1;
+    }
+
+    if (g_reset_req) {
+        g_reset_req = 0;
+        reset_all_now();
     }
 
     float rate = (float)g_fmt.mSampleRate;
@@ -692,6 +758,11 @@ static void init(void) {
         float s = sinf(3.14159265f * (float)i / 1024.0f);
         g_win[i] = s * s;
     }
-    struct rebinding r = { "AudioUnitRender", (void *)my_render, (void **)&orig_render };
-    rebind_symbols(&r, 1);
+    struct rebinding r[] = {
+        { "AudioUnitRender", (void *)my_render, (void **)&orig_render },
+        { "AudioUnitInitialize", (void *)my_init, (void **)&orig_init },
+        { "AudioUnitUninitialize", (void *)my_uninit, (void **)&orig_uninit },
+        { "AudioComponentInstanceDispose", (void *)my_dispose, (void **)&orig_dispose },
+    };
+    rebind_symbols(r, sizeof(r) / sizeof(r[0]));
 }
