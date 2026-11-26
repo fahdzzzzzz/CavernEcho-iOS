@@ -188,13 +188,12 @@ static void echo_monitor_sync(void) {
     else echo_monitor_stop();
 }
 
-// يوقف المراقبة ويعيد تشغيلها مرة وحدة بعد ما يهدأ تغيير المسار
 static void echo_monitor_restart_later(void) {
     NSUInteger gen = ++gMonRestartGen;
     gMonSuspended = YES;
     echo_monitor_stop();
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (gen != gMonRestartGen) return; // جا تغيير أحدث
+        if (gen != gMonRestartGen) return;
         gMonSuspended = NO;
         echo_monitor_sync();
     });
@@ -974,12 +973,17 @@ static NSString *const kCamFilters[8] = { nil, @"CIPhotoEffectNoir", @"CIPhotoEf
 
 #pragma mark - مؤثرات الوجه
 
-enum { FX_NONE = 0, FX_CAT, FX_CLOWN, FX_SKULL, FX_ROBOT, FX_GLASSES, FX_MUSTACHE, FX_CROWN, FX_HEARTS,
-       FX_BIGEYES, FX_BIGMOUTH, FX_PUFFY, FX_THIN, FX_BLURFACE, FX_PIXFACE, FX_CUSTOM, FX_COUNT };
+enum {
+    FX_NONE = 0, FX_CAT, FX_CLOWN, FX_SKULL, FX_ROBOT, FX_GLASSES, FX_MUSTACHE, FX_CROWN, FX_HEARTS,
+    FX_BIGEYES, FX_BIGMOUTH, FX_PUFFY, FX_THIN, FX_BLURFACE, FX_PIXFACE,
+    FX_DEVIL, FX_VAMPIRE, FX_CYBER, FX_CUSTOM,
+    FX_COUNT
+};
 
 static NSString *const kFxNames[FX_COUNT] = {
     @"بدون", @"🐱 قطو", @"🤡 مهرج", @"💀 مكياج جمجمة", @"🤖 روبوت", @"🕶️ نظارة", @"🥸 شنب", @"👑 تاج", @"😍 قلوب",
-    @"👀 عيون كبيرة", @"👄 فم كبير", @"🎈 وجه منفوخ", @"📏 وجه نحيف", @"🌫️ تغبيش الوجه", @"🟦 بكسل الوجه", @"🖼️ قناعي"
+    @"👀 عيون كبيرة", @"👄 فم كبير", @"🎈 وجه منفوخ", @"📏 وجه نحيف", @"🌫️ تغبيش الوجه", @"🟦 بكسل الوجه",
+    @"😈 قرون", @"🧛 مصاص دماء", @"🕶️‍🗨️ سايبربانك", @"🖼️ قناعي"
 };
 
 static void fx_oval(CGRect r, UIColor *c) {
@@ -1103,6 +1107,26 @@ static void fx_draw(int fx) {
         fx_heart(350, 425, 100, red); fx_heart(650, 425, 100, red);
         fx_oval(CGRectMake(220, 570, 150, 90), [UIColor colorWithRed:1 green:0.3 blue:0.45 alpha:0.4]);
         fx_oval(CGRectMake(630, 570, 150, 90), [UIColor colorWithRed:1 green:0.3 blue:0.45 alpha:0.4]);
+    } else if (fx == FX_DEVIL) {
+        UIColor *horn = [UIColor colorWithRed:0.75 green:0.06 blue:0.1 alpha:1];
+        CGPoint lh[4] = { {240, 230}, {140, 30}, {260, 75}, {360, 210} };
+        CGPoint rh[4] = { {760, 230}, {860, 30}, {740, 75}, {640, 210} };
+        fx_poly(lh, 4, horn); fx_poly(rh, 4, horn);
+        fx_line(CGPointMake(260, 330), CGPointMake(420, 385), 16, black);
+        fx_line(CGPointMake(740, 330), CGPointMake(580, 385), 16, black);
+    } else if (fx == FX_VAMPIRE) {
+        CGPoint lf[3] = { {410, 685}, {445, 685}, {428, 765} };
+        CGPoint rf[3] = { {555, 685}, {590, 685}, {572, 765} };
+        fx_poly(lf, 3, white); fx_poly(rf, 3, white);
+        fx_oval(CGRectMake(250, 585, 110, 60), [UIColor colorWithRed:0.7 green:0.05 blue:0.1 alpha:0.35]);
+        fx_oval(CGRectMake(640, 585, 110, 60), [UIColor colorWithRed:0.7 green:0.05 blue:0.1 alpha:0.35]);
+    } else if (fx == FX_CYBER) {
+        UIColor *neon = [UIColor colorWithRed:0.05 green:0.95 blue:0.85 alpha:0.88];
+        [neon setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(190, 355, 620, 125) cornerRadius:24] fill];
+        [[UIColor colorWithRed:1 green:0.1 blue:0.65 alpha:0.9] setFill];
+        [[UIBezierPath bezierPathWithRect:CGRectMake(220, 405, 220, 22)] fill];
+        [[UIBezierPath bezierPathWithRect:CGRectMake(560, 405, 220, 22)] fill];
     }
 }
 
@@ -1311,10 +1335,17 @@ static CIImage *paint_apply(CIImage *img, const EchoFace *f) {
 enum { SHAPE_EYES = 0, SHAPE_MOUTH, SHAPE_NOSE, SHAPE_CHIN, SHAPE_FACE, SHAPE_COUNT };
 static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم", @"الأنف", @"الذقن", @"الوجه (نحيف ↔ منفوخ)" };
 
+// نقطة ربط خارجية لاختياري لو حبيت تربط Snap Camera Kit أو محرك عدسات خارجي لاحقاً
+@protocol EchoExternalLensEngine <NSObject>
+- (nullable CVPixelBufferRef)processPixelBuffer:(CVPixelBufferRef)pixelBuffer lensId:(NSString *)lensId;
+@end
+
 @interface EchoCam : NSObject
 @property (atomic) int effect;
 @property (atomic) int liveFlip;
 @property (atomic) BOOL faceSeen;
+@property (nonatomic, strong, nullable) id<EchoExternalLensEngine> externalEngine;
+@property (nonatomic, copy, nullable) NSString *activeExternalLensId;
 - (void)setShape:(int)index value:(int)v;
 - (BOOL)hasShape;
 - (void)useCustomMask:(CIImage *)mask;
@@ -1391,7 +1422,6 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     @synchronized (self) { return _fxArt[FX_CUSTOM] != nil; }
 }
 
-// قناع مخصص يلتصق بالوجه، يطابق ميلانه وحجمه، ويفرّغ العيون بحواف ناعمة
 - (CIImage *)customFaceMaskForSize:(CGSize)size face:(const EchoFace *)face {
     CGFloat k = MIN(1.0, 640.0 / MAX(size.width, size.height));
     size_t w = MAX(1, (size_t)(size.width * k));
@@ -1418,7 +1448,6 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     CGContextSetGrayFillColor(c, 1, 1);
     CGContextFillEllipseInRect(c, CGRectMake(-radiusX, centerY - radiusY, radiusX * 2.0, radiusY * 2.0));
 
-    // تفريغ العينين عشان تبان عيونك الحقيقية
     CGContextSetGrayFillColor(c, 0, 1);
     paint_eyes_path(c, face, face->eyePtsA, face->nEyeA);
     CGContextFillPath(c);
@@ -1725,6 +1754,14 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
         if (!_ci) _ci = [CIContext contextWithOptions:nil];
         [_ci render:img toCVPixelBuffer:dst];
 
+        if (self.externalEngine && self.activeExternalLensId.length > 0) {
+            CVPixelBufferRef extBuf = [self.externalEngine processPixelBuffer:dst lensId:self.activeExternalLensId];
+            if (extBuf) {
+                CFRelease(dst);
+                dst = extBuf;
+            }
+        }
+
         CMSampleTimingInfo timing;
         CMVideoFormatDescriptionRef desc = NULL;
         CMSampleBufferRef out = NULL;
@@ -1759,7 +1796,8 @@ static void echo_cam_hook_class(Class cls) {
             if (![output isKindOfClass:AVCaptureVideoDataOutput.class]) { orig(me, sel, output, sb, conn); return; }
             EchoCam *cam = [EchoCam shared];
             cam.frames = cam.frames + 1;
-            if (cam.mode == CAM_LIVE && cam.filter == 0 && cam.effect == 0 && cam.liveFlip == 0 && ![cam hasShape]) { orig(me, sel, output, sb, conn); return; }
+            BOOL hasExt = (cam.externalEngine != nil && cam.activeExternalLensId.length > 0);
+            if (cam.mode == CAM_LIVE && cam.filter == 0 && cam.effect == 0 && cam.liveFlip == 0 && ![cam hasShape] && !hasExt) { orig(me, sel, output, sb, conn); return; }
             @autoreleasepool {
                 CMSampleBufferRef out = [cam copyProcessed:sb];
                 if (out) {
