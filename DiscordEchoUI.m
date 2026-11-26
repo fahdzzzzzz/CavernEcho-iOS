@@ -55,6 +55,8 @@ static NSString *const kModeKey  = @"DiscordEchoMode";
 static NSString *const kPitchKey = @"DiscordEchoPitch";
 static NSString *const kRobotKey = @"DiscordEchoRobot";
 static NSString *const kLastURLKey = @"DiscordEchoLastBrowserURL";
+static NSString *const kLastTabKey = @"DiscordEchoLastBrowserTab";
+static NSString *const kConverterURL = @"https://yt5s.in/ar270/";
 
 static const CGFloat kPanelW = 340;
 static const CGFloat kPanelH = 460;
@@ -124,6 +126,8 @@ static AVAudioEngine *gMonEngine;
 static int gMonSong, gMonSelf;
 static int echo_mon_wanted(void) { return gMonSong || gMonSelf; }
 static BOOL gAppReady;
+static NSUInteger gMonRestartGen;
+static BOOL gMonSuspended;
 
 static void echo_monitor_stop(void) {
     if (gMonEngine) {
@@ -164,9 +168,21 @@ static void echo_monitor_start(void) {
 }
 
 static void echo_monitor_sync(void) {
-    if (!gAppReady) return;
+    if (!gAppReady || gMonSuspended) return;
     if (echo_mon_wanted()) echo_monitor_start();
     else echo_monitor_stop();
+}
+
+// يوقف المراقبة ويعيد تشغيلها مرة وحدة بعد ما يهدأ تغيير المسار
+static void echo_monitor_restart_later(void) {
+    NSUInteger gen = ++gMonRestartGen;
+    gMonSuspended = YES;
+    echo_monitor_stop();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (gen != gMonRestartGen) return; // جا تغيير أحدث
+        gMonSuspended = NO;
+        echo_monitor_sync();
+    });
 }
 
 static void echo_set_monitor(int on) {
@@ -324,9 +340,13 @@ static NSString *EchoTime(float s) {
 @property (nonatomic, strong) UIButton *closeBtn;
 @property (nonatomic, strong) UIButton *backBtn;
 @property (nonatomic, strong) UIButton *splitBtn;
+@property (nonatomic, strong) UIButton *mp3Btn;
 @property (nonatomic, strong) NSArray<UIButton *> *quick;
 @property (nonatomic, strong) UILabel *status;
 @property (nonatomic, strong) NSMutableDictionary<NSValue *, NSURL *> *dests;
+@property (nonatomic) BOOL restoring;
+@property (nonatomic, copy) NSString *pendingVideo;
+@property (nonatomic, weak) WKWebView *pendingWeb;
 @end
 
 @implementation EchoBrowserController
@@ -361,6 +381,8 @@ static NSString *EchoTime(float s) {
     [self.view addSubview:self.backBtn];
     [self.view addSubview:self.splitBtn];
     [self.view addSubview:self.closeBtn];
+    self.mp3Btn = [self pill:@"⬇️ MP3" action:@selector(mp3Tapped) tag:0];
+    [self.view addSubview:self.mp3Btn];
 
     self.addr = [[UITextField alloc] init];
     self.addr.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
@@ -402,26 +424,39 @@ static NSString *EchoTime(float s) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSArray *savedURLs = [defaults arrayForKey:@"DiscordEchoBrowserTabsURLs"];
     
-    if (savedURLs && savedURLs.count > 0) {
+    // نقرأ التبويب الأخير قبل ما نفتح النوافذ (الفتح يغيّر المحدد)
+    NSInteger savedIndex = [defaults integerForKey:kLastTabKey];
+    self.restoring = YES;
+
+    if (savedURLs.count > 0) {
         for (NSString *urlString in savedURLs) {
             WKWebView *w = [self openTabWithConfig:nil];
             NSURL *u = [NSURL URLWithString:urlString];
-            if (u) {
-                [w loadRequest:[NSURLRequest requestWithURL:u]];
-            }
+            if (u) [w loadRequest:[NSURLRequest requestWithURL:u]];
         }
     } else {
         [self openTabWithConfig:nil];
         [self loadText:@"https://www.youtube.com"];
 
         [self openTabWithConfig:nil];
-        [self loadText:@"https://yt5s.in/ar270/"];
+        [self loadText:kConverterURL];
+        savedIndex = 0;
     }
 
-    [self selectTab:0];
+    self.restoring = NO;
+    if (savedIndex < 0 || savedIndex >= (NSInteger)self.tabs.count) savedIndex = 0;
+    [self selectTab:savedIndex];
+    [self saveCurrentTabsState];
+
+    // نحفظ كمان لما يروح التطبيق للخلفية
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(saveCurrentTabsState)
+                                                 name:UIApplicationWillResignActiveNotification
+                                               object:nil];
 }
 
 - (void)saveCurrentTabsState {
+    if (self.restoring) return; // لا نكتب فوق المحفوظ أثناء الاسترجاع
     NSMutableArray *urlsArray = [NSMutableArray array];
     for (WKWebView *w in self.tabs) {
         if (w.URL && w.URL.absoluteString.length > 0) {
@@ -430,7 +465,85 @@ static NSString *EchoTime(float s) {
             [urlsArray addObject:@"https://www.google.com"];
         }
     }
-    [[NSUserDefaults standardUserDefaults] setObject:urlsArray forKey:@"DiscordEchoBrowserTabsURLs"];
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    [d setObject:urlsArray forKey:@"DiscordEchoBrowserTabsURLs"];
+    [d setInteger:self.cur forKey:kLastTabKey];
+}
+
+// يتغير الرابط في يوتيوب بدون تحميل صفحة جديدة، فنراقبه مباشرة
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object
+                        change:(NSDictionary *)change context:(void *)context {
+    if (![keyPath isEqualToString:@"URL"]) {
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
+    }
+    if (object == self.web && self.web.URL && !self.addr.isFirstResponder)
+        self.addr.text = self.web.URL.absoluteString;
+    [self saveCurrentTabsState];
+}
+
+// لو النظام قفل صفحة بالخلفية عشان الذاكرة، نرجعها
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)wv {
+    [wv reload];
+}
+
+#pragma mark - زر MP3
+
+- (BOOL)isVideoURL:(NSURL *)u {
+    NSString *h = u.host.lowercaseString;
+    if ([h isEqualToString:@"youtu.be"]) return u.path.length > 1;
+    if (![h isEqualToString:@"youtube.com"] && ![h hasSuffix:@".youtube.com"]) return NO;
+    return [u.path isEqualToString:@"/watch"] || [u.path hasPrefix:@"/shorts/"];
+}
+
+- (void)mp3Tapped {
+    NSURL *video = [self isVideoURL:self.web.URL] ? self.web.URL : nil;
+    for (WKWebView *w in self.tabs) {
+        if (!video && [self isVideoURL:w.URL]) video = w.URL;
+    }
+    if (!video) { self.status.text = @"افتح فيديو في يوتيوب أول، وبعدين اضغط ⬇️ MP3"; return; }
+
+    NSString *host = [NSURL URLWithString:kConverterURL].host;
+    NSInteger target = -1;
+    for (NSInteger i = 0; i < (NSInteger)self.tabs.count; i++) {
+        if ([self.tabs[i].URL.host isEqualToString:host]) { target = i; break; }
+    }
+    if (target < 0) [self openTabWithConfig:nil];
+    else [self selectTab:target];
+
+    self.pendingVideo = video.absoluteString;
+    self.pendingWeb = self.web;
+    UIPasteboard.generalPasteboard.string = self.pendingVideo; // احتياط للصق اليدوي
+    self.status.text = @"⏳ أفتح موقع التحويل وأحط الرابط…";
+    [self loadText:kConverterURL];
+}
+
+- (void)fillConverter:(WKWebView *)wv video:(NSString *)video {
+    // نمرر الرابط كـ JSON عشان ما يكسر السكربت
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@[video] options:0 error:nil];
+    NSString *arg = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    NSString *js = [NSString stringWithFormat:
+        @"(function(url){"
+         "var i=document.querySelector('input[type=url],input[type=search],input[type=text],input:not([type])');"
+         "if(!i)return 'noinput';"
+         "var set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;"
+         "set.call(i,url);"
+         "i.dispatchEvent(new Event('input',{bubbles:true}));"
+         "i.dispatchEvent(new Event('change',{bubbles:true}));"
+         "var f=i.form;"
+         "var b=f&&f.querySelector('button,input[type=submit]');"
+         "if(b){b.click();return 'ok';}"
+         "return 'filled';"
+         "})(%@[0])", arg];
+    __weak EchoBrowserController *ws = self;
+    [wv evaluateJavaScript:js completionHandler:^(id result, NSError *e) {
+        if ([result isEqual:@"ok"])
+            ws.status.text = @"✅ حطيت الرابط. اختر MP3 واضغط تحميل، والملف ينضاف للأغاني";
+        else if ([result isEqual:@"filled"])
+            ws.status.text = @"✅ حطيت الرابط. اضغط زر التحويل في الصفحة";
+        else
+            ws.status.text = @"ما لقيت خانة الرابط. الرابط منسوخ، الصقه يدوي";
+    }];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -442,7 +555,8 @@ static NSString *EchoTime(float s) {
     self.splitBtn.frame = CGRectMake(74, top, 64, 34);
     self.closeBtn.frame = CGRectMake(b.size.width - 72, top, 60, 34);
     
-    CGFloat qx = 144, qw = (b.size.width - 144 - 76 - 6) / 2.0;
+    self.mp3Btn.frame = CGRectMake(144, top, 70, 34);
+    CGFloat qx = 220, qw = (b.size.width - 220 - 76 - 6) / 2.0;
     for (NSInteger i = 0; i < 2; i++) {
         self.quick[i].frame = CGRectMake(qx + i * (qw + 4), top, qw, 34);
     }
@@ -483,6 +597,7 @@ static NSString *EchoTime(float s) {
     w.allowsBackForwardNavigationGestures = YES;
     [self.view addSubview:w];
     [self.tabs addObject:w];
+    [w addObserver:self forKeyPath:@"URL" options:0 context:NULL];
     [self saveCurrentTabsState];
     [self viewDidLayoutSubviews];
     [self selectTab:(NSInteger)self.tabs.count - 1];
@@ -498,6 +613,8 @@ static NSString *EchoTime(float s) {
     NSURL *u = self.web.URL;
     self.addr.text = u ? u.absoluteString : @"";
     [self refreshTabBar];
+    [self saveCurrentTabsState];
+    [self.view setNeedsLayout];
 }
 
 - (void)refreshTabBar {
@@ -542,6 +659,8 @@ static NSString *EchoTime(float s) {
 - (void)closeTabTapped {
     if (self.tabs.count <= 1) { self.status.text = @"هذي آخر نافذة. اضغط ✕ إغلاق لو تبغى تطلع"; return; }
     WKWebView *w = self.web;
+    if (w == self.pendingWeb) { self.pendingWeb = nil; self.pendingVideo = nil; }
+    [w removeObserver:self forKeyPath:@"URL"];
     [w stopLoading];
     [w removeFromSuperview];
     [self.tabs removeObjectAtIndex:self.cur];
@@ -562,14 +681,17 @@ static NSString *EchoTime(float s) {
 
 - (void)closeTapped {
     [self saveCurrentTabsState];
-    for (WKWebView *w in self.tabs) [w stopLoading];
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
 - (void)backTapped { if (self.web.canGoBack) [self.web goBack]; }
 
 - (void)quickTapped:(UIButton *)b {
-    NSArray *urls = @[@"https://www.youtube.com", @"https://yt5s.in/ar270/"];
+    NSArray *urls = @[@"https://www.youtube.com", kConverterURL];
+    NSString *host = [NSURL URLWithString:urls[b.tag]].host;
+    for (NSInteger i = 0; i < (NSInteger)self.tabs.count; i++) {
+        if ([self.tabs[i].URL.host isEqualToString:host]) { [self selectTab:i]; return; }
+    }
     [self loadText:urls[b.tag]];
 }
 
@@ -668,7 +790,11 @@ static NSString *EchoTime(float s) {
     if (!dest) return;
     NSString *name = [[dest.lastPathComponent stringByDeletingPathExtension] copy];
     void (^cb)(NSURL *, NSString *) = self.onPick;
-    [self dismissViewControllerAnimated:YES completion:^{ if (cb) cb(dest, name); }];
+    if (self.presentingViewController) {
+        [self dismissViewControllerAnimated:YES completion:^{ if (cb) cb(dest, name); }];
+    } else if (cb) {
+        cb(dest, name);
+    }
 }
 
 - (void)download:(id)d didFailWithError:(NSError *__nullable)e resumeData:(NSData *__nullable)rd {
@@ -683,6 +809,13 @@ static NSString *EchoTime(float s) {
     }
     [self saveCurrentTabsState];
     [self refreshTabBar];
+    if (self.pendingVideo && wv == self.pendingWeb &&
+        [wv.URL.host isEqualToString:[NSURL URLWithString:kConverterURL].host]) {
+        NSString *video = self.pendingVideo;
+        self.pendingVideo = nil;
+        self.pendingWeb = nil;
+        [self fillConverter:wv video:video];
+    }
 }
 
 @end
@@ -714,6 +847,7 @@ static NSString *EchoTime(float s) {
 @property (nonatomic, strong) UIButton *playBtn;
 @property (nonatomic) BOOL seeking;
 @property (nonatomic, strong) NSTimer *timer;
+@property (nonatomic, strong) EchoBrowserController *browser;
 @end
 
 @implementation EchoController
@@ -1176,7 +1310,9 @@ static NSString *EchoTime(float s) {
 }
 
 - (void)browseSong {
-    EchoBrowserController *vc = [EchoBrowserController new];
+    if (!self.browser) self.browser = [EchoBrowserController new];
+    EchoBrowserController *vc = self.browser;
+    if (vc.presentingViewController || self.presentedViewController) return;
     __weak EchoController *ws = self;
     vc.onPick = ^(NSURL *url, NSString *name) { [ws loadSongAtURL:url name:name cleanup:YES]; };
     vc.modalPresentationStyle = UIModalPresentationFullScreen;
@@ -1365,22 +1501,19 @@ static void echo_ui_init(void) {
                     object:nil
                      queue:[NSOperationQueue mainQueue]
                 usingBlock:^(NSNotification *n) {
-        echo_monitor_stop();
+        NSUInteger reason = [n.userInfo[AVAudioSessionRouteChangeReasonKey] unsignedIntegerValue];
+        // هذا السبب ممكن يتكرر بسبب محركنا نفسه، فنتجاهله عشان ما ندخل في حلقة
+        if (reason == AVAudioSessionRouteChangeReasonRouteConfigurationChange) return;
         DiscordEcho_ResetAll();
-        if (echo_mon_wanted()) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                echo_monitor_sync();
-            });
-        }
+        if (echo_mon_wanted()) echo_monitor_restart_later();
     }];
 
     [nc addObserverForName:AVAudioEngineConfigurationChangeNotification
                     object:nil
                      queue:[NSOperationQueue mainQueue]
                 usingBlock:^(NSNotification *n) {
-        if (echo_mon_wanted() && n.object == gMonEngine) {
-            echo_monitor_stop();
-            echo_monitor_sync();
+        if (echo_mon_wanted() && gMonEngine && n.object == gMonEngine) {
+            echo_monitor_restart_later();
         }
     }];
 }
