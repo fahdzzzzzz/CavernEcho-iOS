@@ -971,19 +971,19 @@ static NSString *const kCamFilterNames[8] = { @"بدون", @"أبيض وأسود
 static NSString *const kCamFilters[8] = { nil, @"CIPhotoEffectNoir", @"CIPhotoEffectChrome", @"CISepiaTone",
                                           @"CIPixellate", @"CIGaussianBlur", @"CIComicEffect", @"CIColorInvert" };
 
-#pragma mark - مؤثرات الوجه
+#pragma mark - مؤثرات الوجه وتبديل الوجه
 
 enum {
     FX_NONE = 0, FX_CAT, FX_CLOWN, FX_SKULL, FX_ROBOT, FX_GLASSES, FX_MUSTACHE, FX_CROWN, FX_HEARTS,
     FX_BIGEYES, FX_BIGMOUTH, FX_PUFFY, FX_THIN, FX_BLURFACE, FX_PIXFACE,
-    FX_DEVIL, FX_VAMPIRE, FX_CYBER, FX_CUSTOM,
+    FX_DEVIL, FX_VAMPIRE, FX_CYBER, FX_CUSTOM, FX_SWAP,
     FX_COUNT
 };
 
 static NSString *const kFxNames[FX_COUNT] = {
     @"بدون", @"🐱 قطو", @"🤡 مهرج", @"💀 مكياج جمجمة", @"🤖 روبوت", @"🕶️ نظارة", @"🥸 شنب", @"👑 تاج", @"😍 قلوب",
     @"👀 عيون كبيرة", @"👄 فم كبير", @"🎈 وجه منفوخ", @"📏 وجه نحيف", @"🌫️ تغبيش الوجه", @"🟦 بكسل الوجه",
-    @"😈 قرون", @"🧛 مصاص دماء", @"🕶️‍🗨️ سايبربانك", @"🖼️ قناعي"
+    @"😈 قرون", @"🧛 مصاص دماء", @"🕶️‍🗨️ سايبربانك", @"🖼️ قناعي", @"🎭 تبديل وجه"
 };
 
 static void fx_oval(CGRect r, UIColor *c) {
@@ -1164,6 +1164,13 @@ static CGPoint fx_mix(CGPoint a, CGPoint b, CGFloat k) {
     return CGPointMake(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k);
 }
 
+static void fx_measure(EchoFace *f) {
+    f->eyes = fx_mix(f->eyeA, f->eyeB, 0.5);
+    f->eyeDist = hypot(f->eyeB.x - f->eyeA.x, f->eyeB.y - f->eyeA.y);
+    f->mouthDist = hypot(f->mouth.x - f->eyes.x, f->mouth.y - f->eyes.y);
+    f->angle = atan2(f->eyes.y - f->mouth.y, f->eyes.x - f->mouth.x) - M_PI_2;
+}
+
 static BOOL fx_find_face(CIImage *img, EchoFace *out) {
     VNDetectFaceLandmarksRequest *req = [[VNDetectFaceLandmarksRequest alloc] init];
     CGSize size = img.extent.size;
@@ -1185,13 +1192,6 @@ static BOOL fx_find_face(CIImage *img, EchoFace *out) {
     out->nEyeA = fx_copy(lm.leftEye, size, out->eyePtsA);
     out->nEyeB = fx_copy(lm.rightEye, size, out->eyePtsB);
     return YES;
-}
-
-static void fx_measure(EchoFace *f) {
-    f->eyes = fx_mix(f->eyeA, f->eyeB, 0.5);
-    f->eyeDist = hypot(f->eyeB.x - f->eyeA.x, f->eyeB.y - f->eyeA.y);
-    f->mouthDist = hypot(f->mouth.x - f->eyes.x, f->mouth.y - f->eyes.y);
-    f->angle = atan2(f->eyes.y - f->mouth.y, f->eyes.x - f->mouth.x) - M_PI_2;
 }
 
 #pragma mark - مكياج يلتصق بالوجه
@@ -1332,25 +1332,88 @@ static CIImage *paint_apply(CIImage *img, const EchoFace *f) {
     return [out imageByCroppingToRect:img.extent];
 }
 
+#pragma mark - دمج وجه من صورة مع مطابقة ملامح الوجه
+
+static CIImage *swap_face_mask(const EchoFace *f, CGSize size) {
+    CGFloat k = MIN(1.0, 640.0 / MAX(size.width, size.height));
+    size_t w = MAX(1, (size_t)(size.width * k)), h = MAX(1, (size_t)(size.height * k));
+    CGColorSpaceRef gray = CGColorSpaceCreateDeviceGray();
+    CGContextRef c = CGBitmapContextCreate(NULL, w, h, 8, 0, gray, (CGBitmapInfo)kCGImageAlphaNone);
+    CGColorSpaceRelease(gray);
+    if (!c) return nil;
+
+    CGContextSetGrayFillColor(c, 0, 1);
+    CGContextFillRect(c, CGRectMake(0, 0, w, h));
+
+    CGContextScaleCTM(c, k, k);
+    CGContextTranslateCTM(c, f->eyes.x, f->eyes.y);
+    CGContextRotateCTM(c, f->angle);
+    CGContextScaleCTM(c, MAX(1.0, f->eyeDist), MAX(1.0, f->eyeDist));
+
+    CGPoint mouthLocal = paint_local(f, f->mouth);
+    CGFloat rx = 1.12;
+    CGFloat ry = MAX(1.15, fabs(mouthLocal.y) * 1.38);
+    CGFloat cy = mouthLocal.y * 0.45;
+
+    CGContextSetGrayFillColor(c, 1, 1);
+    CGContextFillEllipseInRect(c, CGRectMake(-rx, cy - ry, rx * 2.0, ry * 2.0));
+
+    CGImageRef cg = CGBitmapContextCreateImage(c);
+    CGContextRelease(c);
+    if (!cg) return nil;
+
+    CIImage *m = [CIImage imageWithCGImage:cg];
+    CGImageRelease(cg);
+    m = [m imageByApplyingTransform:CGAffineTransformMakeScale(size.width / w, size.height / h)];
+    CGFloat soft = MAX(5.0, f->eyeDist * 0.14);
+    return [[[m imageByClampingToExtent]
+             imageByApplyingFilter:@"CIGaussianBlur"
+               withInputParameters:@{ kCIInputRadiusKey: @(soft) }]
+            imageByCroppingToRect:CGRectMake(0, 0, size.width, size.height)];
+}
+
+static CIImage *swap_apply(CIImage *dstImg, CIImage *srcFaceImg, const EchoFace *srcFace, const EchoFace *dstFace) {
+    if (!srcFaceImg || srcFace->eyeDist < 2.0 || dstFace->eyeDist < 2.0) return dstImg;
+
+    // مواءمة وجه المصدر: نضع مركز عيني المصدر عند الأصل، نلفه بزاوية المصدر، ثم نطبقه على زاوية ومقياس ومكان عيني الهدف
+    CGFloat scaleX = dstFace->eyeDist / srcFace->eyeDist;
+    CGFloat srcMouthSpan = MAX(1.0, srcFace->mouthDist);
+    CGFloat dstMouthSpan = MAX(1.0, dstFace->mouthDist);
+    CGFloat scaleY = MAX(0.75, MIN(1.35, (dstMouthSpan / srcMouthSpan) * 0.5 + scaleX * 0.5));
+
+    CGAffineTransform t = CGAffineTransformIdentity;
+    t = CGAffineTransformConcat(t, CGAffineTransformMakeTranslation(-srcFace->eyes.x, -srcFace->eyes.y));
+    t = CGAffineTransformConcat(t, CGAffineTransformMakeRotation(-srcFace->angle));
+    t = CGAffineTransformConcat(t, CGAffineTransformMakeScale(scaleX, scaleY));
+    t = CGAffineTransformConcat(t, CGAffineTransformMakeRotation(dstFace->angle));
+    t = CGAffineTransformConcat(t, CGAffineTransformMakeTranslation(dstFace->eyes.x, dstFace->eyes.y));
+
+    CIImage *alignedSrc = [[srcFaceImg imageByApplyingTransform:t] imageByCroppingToRect:dstImg.extent];
+    CIImage *mask = swap_face_mask(dstFace, dstImg.extent.size);
+    if (!mask) return dstImg;
+
+    return [[alignedSrc imageByApplyingFilter:@"CIBlendWithMask"
+                          withInputParameters:@{
+                              kCIInputBackgroundImageKey: dstImg,
+                              kCIInputMaskImageKey: mask
+                          }] imageByCroppingToRect:dstImg.extent];
+}
+
 enum { SHAPE_EYES = 0, SHAPE_MOUTH, SHAPE_NOSE, SHAPE_CHIN, SHAPE_FACE, SHAPE_COUNT };
 static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم", @"الأنف", @"الذقن", @"الوجه (نحيف ↔ منفوخ)" };
 
-#pragma mark - واجهة ربط مكتبة العدسات الخارجية
-
-@protocol EchoExternalLensEngine <NSObject>
-- (nullable CVPixelBufferRef)processPixelBuffer:(CVPixelBufferRef)pixelBuffer lensId:(NSString *)lensId;
-@end
+#pragma mark - محرك الكاميرا
 
 @interface EchoCam : NSObject
 @property (atomic) int effect;
 @property (atomic) int liveFlip;
 @property (atomic) BOOL faceSeen;
-@property (nonatomic, strong, nullable) id<EchoExternalLensEngine> externalEngine;
-@property (nonatomic, copy, nullable) NSString *activeExternalLensId;
 - (void)setShape:(int)index value:(int)v;
 - (BOOL)hasShape;
 - (void)useCustomMask:(CIImage *)mask;
 - (BOOL)hasCustomMask;
+- (BOOL)useSwapFaceImage:(UIImage *)image;
+- (BOOL)hasSwapFace;
 @property (atomic) int mode;
 @property (atomic) int filter;
 @property (atomic) int turns;
@@ -1377,11 +1440,42 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     size_t _poolW, _poolH;
     OSType _poolType;
     CIImage *_fxArt[FX_COUNT];
+    CIImage *_swapSourceImg;
+    EchoFace _swapSourceFace;
+    BOOL _haveSwapSource;
     int _shape[SHAPE_COUNT];
     EchoFace _face;
     BOOL _haveFace;
     CFTimeInterval _faceTime;
     int _searchTurn;
+}
+
+- (BOOL)useSwapFaceImage:(UIImage *)image {
+    if (!image || image.size.width < 2 || image.size.height < 2) return NO;
+    CGFloat k = MIN(1.0, 1280.0 / MAX(image.size.width, image.size.height));
+    CGSize sz = CGSizeMake(floor(image.size.width * k), floor(image.size.height * k));
+    UIGraphicsImageRendererFormat *fmt = [UIGraphicsImageRendererFormat defaultFormat];
+    fmt.scale = 1;
+    UIImage *flat = [[[UIGraphicsImageRenderer alloc] initWithSize:sz format:fmt]
+        imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+            [image drawInRect:CGRectMake(0, 0, sz.width, sz.height)];
+        }];
+    if (!flat.CGImage) return NO;
+    CIImage *ci = [CIImage imageWithCGImage:flat.CGImage];
+    ci = [ci imageByApplyingTransform:CGAffineTransformMakeTranslation(-ci.extent.origin.x, -ci.extent.origin.y)];
+    EchoFace found;
+    if (!fx_find_face(ci, &found)) return NO;
+    fx_measure(&found);
+    @synchronized (self) {
+        _swapSourceImg = ci;
+        _swapSourceFace = found;
+        _haveSwapSource = YES;
+    }
+    return YES;
+}
+
+- (BOOL)hasSwapFace {
+    @synchronized (self) { return _haveSwapSource && _swapSourceImg != nil; }
 }
 
 - (void)setShape:(int)index value:(int)v {
@@ -1531,6 +1625,10 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
 
 - (CIImage *)effect:(int)fx on:(CIImage *)img face:(EchoFace)face {
     if (fx == FX_SKULL) return paint_apply(img, &face);
+    if (fx == FX_SWAP) {
+        if (!_haveSwapSource || !_swapSourceImg) return img;
+        return swap_apply(img, _swapSourceImg, &_swapSourceFace, &face);
+    }
     CGFloat d = face.eyeDist;
     CGPoint middle = fx_mix(face.eyes, face.mouth, 0.5);
     if (fx == FX_BIGEYES) {
@@ -1754,14 +1852,6 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
         if (!_ci) _ci = [CIContext contextWithOptions:nil];
         [_ci render:img toCVPixelBuffer:dst];
 
-        if (self.externalEngine && self.activeExternalLensId.length > 0) {
-            CVPixelBufferRef extBuf = [self.externalEngine processPixelBuffer:dst lensId:self.activeExternalLensId];
-            if (extBuf) {
-                CFRelease(dst);
-                dst = extBuf;
-            }
-        }
-
         CMSampleTimingInfo timing;
         CMVideoFormatDescriptionRef desc = NULL;
         CMSampleBufferRef out = NULL;
@@ -1796,8 +1886,7 @@ static void echo_cam_hook_class(Class cls) {
             if (![output isKindOfClass:AVCaptureVideoDataOutput.class]) { orig(me, sel, output, sb, conn); return; }
             EchoCam *cam = [EchoCam shared];
             cam.frames = cam.frames + 1;
-            BOOL hasExt = (cam.externalEngine != nil && cam.activeExternalLensId.length > 0);
-            if (cam.mode == CAM_LIVE && cam.filter == 0 && cam.effect == 0 && cam.liveFlip == 0 && ![cam hasShape] && !hasExt) { orig(me, sel, output, sb, conn); return; }
+            if (cam.mode == CAM_LIVE && cam.filter == 0 && cam.effect == 0 && cam.liveFlip == 0 && ![cam hasShape]) { orig(me, sel, output, sb, conn); return; }
             @autoreleasepool {
                 CMSampleBufferRef out = [cam copyProcessed:sb];
                 if (out) {
@@ -1862,6 +1951,7 @@ static void echo_cam_install(void) {
 @property (nonatomic, strong) NSArray<UISlider *> *shapeSliders;
 @property (nonatomic, strong) NSArray<UILabel *> *shapeLabels;
 @property (nonatomic) BOOL pickingMask;
+@property (nonatomic) BOOL pickingSwapFace;
 @property (nonatomic, strong) NSURL *camFile;
 @property (nonatomic) unsigned lastCamFrames;
 @property (nonatomic) CFTimeInterval lastCamTime;
@@ -2234,6 +2324,8 @@ static void echo_cam_install(void) {
     }
     self.camFxBtns = fxb;
     y += ((FX_COUNT + 2) / 3) * 40 + 2;
+    [tab addSubview:[self makeButton:@"🎭 تبديل وجه من الصور" frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(camPickSwapFace)]];
+    y += 40;
     [tab addSubview:[self makeButton:@"➕ حط قناعك (صورة PNG شفافة)" frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(camPickMask)]];
     y += 44;
 
@@ -2292,11 +2384,36 @@ static void echo_cam_install(void) {
 
 - (void)camFxTapped:(UIButton *)b {
     if (b.tag == FX_CUSTOM && ![[EchoCam shared] hasCustomMask]) { [self camPickMask]; return; }
+    if (b.tag == FX_SWAP && ![[EchoCam shared] hasSwapFace]) { [self camPickSwapFace]; return; }
     [EchoCam shared].effect = (int)b.tag;
     [self refreshCamButtons];
 }
 
+- (void)camPickSwapFace {
+    self.pickingMask = NO;
+    self.pickingSwapFace = YES;
+    if (@available(iOS 14.0, *)) {
+        PHPickerConfiguration *cfg = [[PHPickerConfiguration alloc] init];
+        cfg.selectionLimit = 1;
+        cfg.filter = PHPickerFilter.imagesFilter;
+        PHPickerViewController *p = [[PHPickerViewController alloc] initWithConfiguration:cfg];
+        p.delegate = self;
+        [self presentViewController:p animated:YES completion:nil];
+    } else {
+        self.pickingCam = YES;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        UIDocumentPickerViewController *p =
+            [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.image"]
+                                                                   inMode:UIDocumentPickerModeImport];
+#pragma clang diagnostic pop
+        p.delegate = self;
+        [self presentViewController:p animated:YES completion:nil];
+    }
+}
+
 - (void)camPickMask {
+    self.pickingSwapFace = NO;
     self.pickingMask = YES;
     [self openCamFiles];
 }
@@ -2342,6 +2459,7 @@ static void echo_cam_install(void) {
 
 - (void)camFromPhotos {
     self.pickingMask = NO;
+    self.pickingSwapFace = NO;
     if (@available(iOS 14.0, *)) {
         PHPickerConfiguration *cfg = [[PHPickerConfiguration alloc] init];
         cfg.selectionLimit = 1;
@@ -2356,6 +2474,7 @@ static void echo_cam_install(void) {
 
 - (void)camFromFiles {
     self.pickingMask = NO;
+    self.pickingSwapFace = NO;
     [self openCamFiles];
 }
 
@@ -2371,13 +2490,20 @@ static void echo_cam_install(void) {
     [self presentViewController:p animated:YES completion:nil];
 }
 
-- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller { self.pickingCam = NO; self.pickingMask = NO; }
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+    self.pickingCam = NO;
+    self.pickingMask = NO;
+    self.pickingSwapFace = NO;
+}
 
 - (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results API_AVAILABLE(ios(14.0)) {
     [picker dismissViewControllerAnimated:YES completion:nil];
     NSItemProvider *item = results.firstObject.itemProvider;
-    if (!item) return;
-    BOOL video = [item hasItemConformingToTypeIdentifier:@"public.movie"];
+    if (!item) {
+        self.pickingSwapFace = NO;
+        return;
+    }
+    BOOL video = !self.pickingSwapFace && [item hasItemConformingToTypeIdentifier:@"public.movie"];
     self.camSource.text = @"⏳ جاري التحميل…";
     __weak EchoController *ws = self;
     [item loadFileRepresentationForTypeIdentifier:(video ? @"public.movie" : @"public.image")
@@ -2393,7 +2519,30 @@ static void echo_cam_install(void) {
 }
 
 - (void)loadCamFile:(NSURL *)url video:(BOOL)video {
-    if (!url) { self.camSource.text = @"❌ ما قدرت أقرأ الملف"; return; }
+    if (!url) {
+        self.pickingSwapFace = NO;
+        self.pickingMask = NO;
+        self.camSource.text = @"❌ ما قدرت أقرأ الملف";
+        return;
+    }
+    if (self.pickingSwapFace) {
+        self.pickingSwapFace = NO;
+        UIImage *img = video ? nil : [UIImage imageWithContentsOfFile:url.path];
+        [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
+        if (!img || img.size.width < 2 || img.size.height < 2) {
+            self.camSource.text = @"❌ اختر صورة واضحة فيها وجه";
+            return;
+        }
+        BOOL ok = [[EchoCam shared] useSwapFaceImage:img];
+        if (!ok) {
+            self.camSource.text = @"❌ ما قدرت ألقى ملامح وجه واضحة في الصورة";
+            return;
+        }
+        [EchoCam shared].effect = FX_SWAP;
+        [self refreshCamButtons];
+        self.camSource.text = @"🎭 تم تحميل الوجه ومطابقة ملامحه";
+        return;
+    }
     if (self.pickingMask) {
         self.pickingMask = NO;
         UIImage *img = video ? nil : [UIImage imageWithContentsOfFile:url.path];
