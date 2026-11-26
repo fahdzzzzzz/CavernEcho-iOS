@@ -584,7 +584,7 @@ static NSString *EchoTime(float s) {
 
 - (NSString *)autoScript {
     return
-         "(function(url,step){"
+         @"(function(url,step){"
          "var seen=function(e){var r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';};"
          "var txt=function(e){return (e.innerText||e.value||'').replace(/\\s+/g,' ').trim();};"
          "var all=function(q,root){return Array.prototype.filter.call((root||document).querySelectorAll(q),seen);};"
