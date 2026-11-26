@@ -220,7 +220,7 @@ static const ToggleSpec kToggles[T_COUNT] = {
     [T_PRIVATE]  = { @"🤫 اسمعها لحالي (لا تطلع بالمايك)", @"DiscordEchoSongPriv", 0, DiscordEcho_SetSongPrivate },
     [T_MONITOR]  = { @"🎧 أنا أسمع الأغنية",            @"DiscordEchoMonitor",  0, echo_set_monitor },
     [T_SELFMON]  = { @"🎧 أسمع صوتي (مع الصدى)",        @"DiscordEchoSelfMon",  0, echo_set_selfmon },
-    [T_MICMUTE]  = { @"🎙️ كتم المايك / تشغيله",         @"DiscordEchoMicMute",  0, echo_set_micmute_fast },
+    [T_MICMUTE]  = { @"🎙️ كتم صوتي (الأغنية تكمل)",         @"DiscordEchoMicMute",  0, echo_set_micmute_fast },
 };
 
 static NSString *const kEqPresetNames[5] = { @"مسطح", @"دافئ", @"ناعم", @"صافي", @"بدون جهير" };
@@ -375,10 +375,11 @@ static NSString *EchoTime(float s) {
     self.dests = [NSMutableDictionary dictionary];
     self.tabs = [NSMutableArray array];
     self.cur = -1;
-    self.isSplitScreen = NO;
+    self.isSplitScreen = YES;
 
     self.backBtn = [self pill:@"◀︎ رجوع" action:@selector(backTapped) tag:0];
-    self.splitBtn = [self pill:@"▤ تقسيم" action:@selector(splitTapped) tag:0];
+    self.splitBtn = [self pill:@"🪟 فردي" action:@selector(splitTapped) tag:0];
+    self.splitBtn.backgroundColor = [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95];
     self.closeBtn = [self pill:@"✕ إغلاق" action:@selector(closeTapped) tag:0];
     
     [self.view addSubview:self.backBtn];
@@ -704,13 +705,13 @@ static NSString *EchoTime(float s) {
 
     if (self.isSplitScreen && self.tabs.count >= 2) {
         CGFloat halfW = b.size.width / 2.0;
-        self.tabs[0].hidden = NO;
-        self.tabs[1].hidden = NO;
-        self.tabs[0].frame = CGRectMake(0, startY, halfW - 1, totalH);
-        self.tabs[1].frame = CGRectMake(halfW + 1, startY, halfW - 1, totalH);
-        for (NSInteger i = 2; i < (NSInteger)self.tabs.count; i++) {
-            self.tabs[i].hidden = YES;
+        // اليسار النافذة الأولى، واليمين الثانية أو أي نافذة إضافية تختارها
+        NSInteger right = self.cur >= 2 ? self.cur : 1;
+        for (NSInteger i = 0; i < (NSInteger)self.tabs.count; i++) {
+            self.tabs[i].hidden = (i != 0 && i != right);
         }
+        self.tabs[0].frame = CGRectMake(0, startY, halfW - 1, totalH);
+        self.tabs[right].frame = CGRectMake(halfW + 1, startY, halfW - 1, totalH);
     } else {
         CGRect wf = CGRectMake(0, startY, b.size.width, totalH);
         for (NSInteger i = 0; i < (NSInteger)self.tabs.count; i++) {
@@ -760,7 +761,7 @@ static NSString *EchoTime(float s) {
         if (t.length > 14) t = [[t substringToIndex:14] stringByAppendingString:@"…"];
         UIButton *b = [self pill:t action:@selector(tabTapped:) tag:i];
         b.frame = CGRectMake(x, 0, 104, 32);
-        if (i == self.cur && !self.isSplitScreen) b.backgroundColor = [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95];
+        if (i == self.cur) b.backgroundColor = [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95];
         [self.tabBar addSubview:b];
         x += 110;
     }
@@ -1476,7 +1477,8 @@ static NSString *EchoTime(float s) {
                 self.songLabel.text = @"❌ ما قدرت أقرأ الملف. جرّب mp3 أو m4a أو wav";
                 return;
             }
-            DiscordEcho_MusicLoad(buf, count);
+            int loaded = DiscordEcho_MusicLoad(buf, count);
+            if (loaded && cleanup) DiscordEcho_MusicPlay(1); // ملف من المتصفح: يشتغل على طول
             NSString *t = [NSString stringWithFormat:@"🎵 %@", name];
             if (truncated) t = [t stringByAppendingString:@" (أول 8 دقايق بس)"];
             self.songLabel.text = t;
