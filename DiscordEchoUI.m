@@ -8,11 +8,13 @@
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <PhotosUI/PhotosUI.h>
+#import <Vision/Vision.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 
 // ربط المكتبات تلقائياً بدون تعديل ملف البناء
 __asm__(".linker_option \"-framework\", \"CoreImage\"");
+__asm__(".linker_option \"-framework\", \"Vision\"");
 __asm__(".linker_option \"-framework\", \"CoreMedia\"");
 __asm__(".linker_option \"-framework\", \"CoreVideo\"");
 __asm__(".linker_option \"-framework\", \"PhotosUI\"");
@@ -982,7 +984,211 @@ static NSString *const kCamFilterNames[8] = { @"بدون", @"أبيض وأسود
 static NSString *const kCamFilters[8] = { nil, @"CIPhotoEffectNoir", @"CIPhotoEffectChrome", @"CISepiaTone",
                                           @"CIPixellate", @"CIGaussianBlur", @"CIComicEffect", @"CIColorInvert" };
 
+#pragma mark - مؤثرات الوجه
+
+enum { FX_NONE = 0, FX_CAT, FX_CLOWN, FX_SKULL, FX_ROBOT, FX_GLASSES, FX_MUSTACHE, FX_CROWN, FX_HEARTS,
+       FX_BIGEYES, FX_BIGMOUTH, FX_PUFFY, FX_THIN, FX_BLURFACE, FX_PIXFACE, FX_CUSTOM, FX_COUNT };
+
+static NSString *const kFxNames[FX_COUNT] = {
+    @"بدون", @"🐱 قطو", @"🤡 مهرج", @"💀 جمجمة", @"🤖 روبوت", @"🕶️ نظارة", @"🥸 شنب", @"👑 تاج", @"😍 قلوب",
+    @"👀 عيون كبيرة", @"👄 فم كبير", @"🎈 وجه منفوخ", @"📏 وجه نحيف", @"🌫️ تغبيش الوجه", @"🟦 بكسل الوجه", @"🖼️ قناعي"
+};
+
+static void fx_oval(CGRect r, UIColor *c) {
+    [c setFill];
+    [[UIBezierPath bezierPathWithOvalInRect:r] fill];
+}
+
+static void fx_poly(const CGPoint *p, int n, UIColor *c) {
+    UIBezierPath *b = [UIBezierPath bezierPath];
+    [b moveToPoint:p[0]];
+    for (int i = 1; i < n; i++) [b addLineToPoint:p[i]];
+    [b closePath];
+    [c setFill];
+    [b fill];
+}
+
+static void fx_line(CGPoint a, CGPoint b, CGFloat width, UIColor *c) {
+    UIBezierPath *p = [UIBezierPath bezierPath];
+    [p moveToPoint:a];
+    [p addLineToPoint:b];
+    p.lineWidth = width;
+    p.lineCapStyle = kCGLineCapRound;
+    [c setStroke];
+    [p stroke];
+}
+
+// حلقة: شكل بيضاوي فيه فتحات للعيون والفم
+static void fx_mask(UIColor *c) {
+    UIBezierPath *p = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(170, 150, 660, 790)];
+    [p appendPath:[UIBezierPath bezierPathWithOvalInRect:CGRectMake(285, 365, 130, 110)]];
+    [p appendPath:[UIBezierPath bezierPathWithOvalInRect:CGRectMake(585, 365, 130, 110)]];
+    [p appendPath:[UIBezierPath bezierPathWithOvalInRect:CGRectMake(390, 675, 220, 95)]];
+    p.usesEvenOddFillRule = YES;
+    [c setFill];
+    [p fill];
+}
+
+static void fx_heart(CGFloat cx, CGFloat cy, CGFloat s, UIColor *c) {
+    UIBezierPath *p = [UIBezierPath bezierPath];
+    [p moveToPoint:CGPointMake(cx, cy + s)];
+    [p addCurveToPoint:CGPointMake(cx, cy - s * 0.45) controlPoint1:CGPointMake(cx - s * 1.8, cy - s * 0.2)
+         controlPoint2:CGPointMake(cx - s * 0.8, cy - s * 1.4)];
+    [p addCurveToPoint:CGPointMake(cx, cy + s) controlPoint1:CGPointMake(cx + s * 0.8, cy - s * 1.4)
+         controlPoint2:CGPointMake(cx + s * 1.8, cy - s * 0.2)];
+    [c setFill];
+    [p fill];
+}
+
+// لوحة 1000×1000: العينين عند (350,420) و (650,420) والفم عند (500,720)
+static void fx_draw(int fx) {
+    UIColor *black = UIColor.blackColor, *white = UIColor.whiteColor, *red = [UIColor colorWithRed:0.9 green:0.1 blue:0.15 alpha:1];
+    if (fx == FX_CAT) {
+        UIColor *fur = [UIColor colorWithRed:0.95 green:0.6 blue:0.2 alpha:1];
+        UIColor *pink = [UIColor colorWithRed:1 green:0.55 blue:0.65 alpha:1];
+        CGPoint l[3] = { {190, 330}, {200, 20}, {430, 190} }, r[3] = { {810, 330}, {800, 20}, {570, 190} };
+        fx_poly(l, 3, fur); fx_poly(r, 3, fur);
+        fx_mask([fur colorWithAlphaComponent:0.92]);
+        CGPoint li[3] = { {240, 230}, {235, 90}, {350, 180} }, ri[3] = { {760, 230}, {765, 90}, {650, 180} };
+        fx_poly(li, 3, pink); fx_poly(ri, 3, pink);
+        fx_oval(CGRectMake(350, 570, 300, 150), white);
+        CGPoint nose[3] = { {450, 570}, {550, 570}, {500, 625} };
+        fx_poly(nose, 3, pink);
+        for (int i = -1; i <= 1; i++) {
+            fx_line(CGPointMake(360, 620 + i * 30), CGPointMake(110, 600 + i * 75), 9, black);
+            fx_line(CGPointMake(640, 620 + i * 30), CGPointMake(890, 600 + i * 75), 9, black);
+        }
+    } else if (fx == FX_CLOWN) {
+        fx_mask([UIColor colorWithWhite:1 alpha:0.88]);
+        UIColor *blue = [UIColor colorWithRed:0.1 green:0.35 blue:0.95 alpha:1];
+        for (int x = 350; x <= 650; x += 300) {
+            CGPoint up[3] = { {x - 35, 355}, {x, 250}, {x + 35, 355} }, dn[3] = { {x - 35, 488}, {x, 590}, {x + 35, 488} };
+            fx_poly(up, 3, blue); fx_poly(dn, 3, blue);
+        }
+        UIBezierPath *smile = [UIBezierPath bezierPath];
+        [smile moveToPoint:CGPointMake(300, 680)];
+        [smile addQuadCurveToPoint:CGPointMake(700, 680) controlPoint:CGPointMake(500, 940)];
+        smile.lineWidth = 45; smile.lineCapStyle = kCGLineCapRound;
+        [red setStroke]; [smile stroke];
+        fx_oval(CGRectMake(430, 510, 140, 140), red);
+        for (int i = 0; i < 5; i++) {
+            fx_oval(CGRectMake(90 + i * 45, 330 - i * 70, 180, 180), red);
+            fx_oval(CGRectMake(730 - i * 45, 330 - i * 70, 180, 180), red);
+        }
+    } else if (fx == FX_SKULL) {
+        fx_mask([UIColor colorWithWhite:0.93 alpha:1]);
+        for (int x = 350; x <= 650; x += 300) {
+            UIBezierPath *ring = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(x - 100, 330, 200, 180)];
+            ring.lineWidth = 60; [black setStroke]; [ring stroke];
+        }
+        CGPoint nose[3] = { {500, 530}, {445, 630}, {555, 630} };
+        fx_poly(nose, 3, black);
+        fx_line(CGPointMake(300, 720), CGPointMake(390, 720), 12, black);
+        fx_line(CGPointMake(610, 720), CGPointMake(700, 720), 12, black);
+        for (int x = 320; x <= 680; x += 45) fx_line(CGPointMake(x, (x > 390 && x < 610) ? 780 : 690),
+                                                     CGPointMake(x, (x > 390 && x < 610) ? 840 : 755), 10, black);
+    } else if (fx == FX_ROBOT) {
+        UIColor *metal = [UIColor colorWithRed:0.55 green:0.6 blue:0.66 alpha:1];
+        UIColor *glow = [UIColor colorWithRed:0.1 green:0.95 blue:1 alpha:1];
+        fx_line(CGPointMake(500, 150), CGPointMake(500, 50), 22, metal);
+        fx_oval(CGRectMake(460, 10, 80, 80), red);
+        [metal setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(165, 140, 670, 790) cornerRadius:120] fill];
+        [black setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(220, 340, 560, 165) cornerRadius:50] fill];
+        fx_oval(CGRectMake(305, 378, 90, 90), glow); fx_oval(CGRectMake(605, 378, 90, 90), glow);
+        [black setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(340, 660, 320, 130) cornerRadius:25] fill];
+        for (int x = 385; x <= 615; x += 46) fx_line(CGPointMake(x, 685), CGPointMake(x, 765), 14, glow);
+        fx_oval(CGRectMake(115, 440, 90, 170), metal); fx_oval(CGRectMake(795, 440, 90, 170), metal);
+    } else if (fx == FX_GLASSES) {
+        [[UIColor colorWithWhite:0.02 alpha:0.94] setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(215, 340, 255, 170) cornerRadius:55] fill];
+        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(530, 340, 255, 170) cornerRadius:55] fill];
+        fx_line(CGPointMake(455, 390), CGPointMake(545, 390), 26, black);
+        fx_line(CGPointMake(225, 385), CGPointMake(120, 360), 24, black);
+        fx_line(CGPointMake(775, 385), CGPointMake(880, 360), 24, black);
+        fx_line(CGPointMake(255, 385), CGPointMake(310, 370), 18, [UIColor colorWithWhite:1 alpha:0.55]);
+    } else if (fx == FX_MUSTACHE) {
+        UIBezierPath *p = [UIBezierPath bezierPath];
+        [p moveToPoint:CGPointMake(500, 620)];
+        [p addCurveToPoint:CGPointMake(235, 625) controlPoint1:CGPointMake(400, 560) controlPoint2:CGPointMake(330, 700)];
+        [p addCurveToPoint:CGPointMake(500, 680) controlPoint1:CGPointMake(270, 750) controlPoint2:CGPointMake(430, 745)];
+        [p addCurveToPoint:CGPointMake(765, 625) controlPoint1:CGPointMake(570, 745) controlPoint2:CGPointMake(730, 750)];
+        [p addCurveToPoint:CGPointMake(500, 620) controlPoint1:CGPointMake(670, 700) controlPoint2:CGPointMake(600, 560)];
+        [[UIColor colorWithRed:0.16 green:0.09 blue:0.04 alpha:1] setFill];
+        [p fill];
+    } else if (fx == FX_CROWN) {
+        UIColor *gold = [UIColor colorWithRed:1 green:0.78 blue:0.1 alpha:1];
+        CGPoint c[7] = { {240, 210}, {215, 0}, {365, 110}, {500, 0}, {635, 110}, {785, 0}, {760, 210} };
+        fx_poly(c, 7, gold);
+        fx_oval(CGRectMake(470, 120, 60, 60), red);
+        fx_oval(CGRectMake(320, 140, 45, 45), [UIColor systemBlueColor]);
+        fx_oval(CGRectMake(635, 140, 45, 45), [UIColor systemGreenColor]);
+    } else if (fx == FX_HEARTS) {
+        fx_heart(350, 425, 100, red); fx_heart(650, 425, 100, red);
+        fx_oval(CGRectMake(220, 570, 150, 90), [UIColor colorWithRed:1 green:0.3 blue:0.45 alpha:0.4]);
+        fx_oval(CGRectMake(630, 570, 150, 90), [UIColor colorWithRed:1 green:0.3 blue:0.45 alpha:0.4]);
+    }
+}
+
+static UIImage *fx_render(void (^draw)(void)) {
+    UIGraphicsImageRendererFormat *f = [UIGraphicsImageRendererFormat defaultFormat];
+    f.scale = 1;
+    f.opaque = NO;
+    return [[[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(1000, 1000) format:f]
+        imageWithActions:^(UIGraphicsImageRendererContext *ctx) { draw(); }];
+}
+
+typedef struct {
+    CGPoint eyes, eyeA, eyeB, mouth;
+    CGFloat eyeDist, mouthDist, angle;
+} EchoFace;
+
+static CGPoint fx_center(VNFaceLandmarkRegion2D *r, CGSize size) {
+    const CGPoint *p = [r pointsInImageOfSize:size];
+    CGFloat x = 0, y = 0;
+    for (NSUInteger i = 0; i < r.pointCount; i++) { x += p[i].x; y += p[i].y; }
+    return CGPointMake(x / r.pointCount, y / r.pointCount);
+}
+
+static CGPoint fx_mix(CGPoint a, CGPoint b, CGFloat k) {
+    return CGPointMake(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k);
+}
+
+// يطلع أماكن العينين والفم لأكبر وجه في الصورة
+static BOOL fx_find_face(CIImage *img, EchoFace *out) {
+    VNDetectFaceLandmarksRequest *req = [[VNDetectFaceLandmarksRequest alloc] init];
+    VNImageRequestHandler *h = [[VNImageRequestHandler alloc] initWithCIImage:img options:@{}];
+    NSError *e = nil;
+    if (![h performRequests:@[req] error:&e]) return NO;
+    VNFaceObservation *best = nil;
+    for (VNFaceObservation *o in req.results) {
+        if (!best || o.boundingBox.size.width > best.boundingBox.size.width) best = o;
+    }
+    VNFaceLandmarks2D *lm = best.landmarks;
+    if (!lm.leftEye.pointCount || !lm.rightEye.pointCount || !lm.outerLips.pointCount) return NO;
+    CGSize size = img.extent.size;
+    out->eyeA = fx_center(lm.leftEye, size);
+    out->eyeB = fx_center(lm.rightEye, size);
+    out->mouth = fx_center(lm.outerLips, size);
+    return YES;
+}
+
+static void fx_measure(EchoFace *f) {
+    f->eyes = fx_mix(f->eyeA, f->eyeB, 0.5);
+    f->eyeDist = hypot(f->eyeB.x - f->eyeA.x, f->eyeB.y - f->eyeA.y);
+    f->mouthDist = hypot(f->mouth.x - f->eyes.x, f->mouth.y - f->eyes.y);
+    // الاتجاه من الفم للعينين، عشان القناع يميل مع الراس
+    f->angle = atan2(f->eyes.y - f->mouth.y, f->eyes.x - f->mouth.x) - M_PI_2;
+}
+
 @interface EchoCam : NSObject
+@property (atomic) int effect;
+@property (atomic) int liveFlip;   // عكس الكاميرا الحقيقية: 0 طافي، 1، 2
+@property (atomic) BOOL faceSeen;
+- (void)useCustomMask:(CIImage *)mask;
+- (BOOL)hasCustomMask;
 @property (atomic) int mode;
 @property (atomic) int filter;
 @property (atomic) int turns;      // تدوير الصورة/الفيديو: 0..3
@@ -1008,6 +1214,107 @@ static NSString *const kCamFilters[8] = { nil, @"CIPhotoEffectNoir", @"CIPhotoEf
     CVPixelBufferPoolRef _pool;
     size_t _poolW, _poolH;
     OSType _poolType;
+    CIImage *_fxArt[FX_COUNT];
+    EchoFace _face;
+    BOOL _haveFace;
+    CFTimeInterval _faceTime;
+    unsigned _tick;
+    int _searchTurn;
+}
+
+- (void)useCustomMask:(CIImage *)mask {
+    @synchronized (self) { _fxArt[FX_CUSTOM] = mask; }
+}
+- (BOOL)hasCustomMask {
+    @synchronized (self) { return _fxArt[FX_CUSTOM] != nil; }
+}
+
+// نبحث عن الوجه. إطارات الكاميرا ممكن تكون مايلة، فنجرب الاتجاهات لين نلقاه
+- (CIImage *)applyEffect:(CIImage *)img {
+    int fx = self.effect;
+    if (fx <= FX_NONE || fx >= FX_COUNT) { _haveFace = NO; self.faceSeen = NO; return img; }
+
+    static const int kTry[4] = { 1, 6, 8, 3 };
+    int o = kTry[_searchTurn & 3];
+    int back = o == 6 ? 8 : (o == 8 ? 6 : o);
+    CIImage *up = o == 1 ? img : [img imageByApplyingOrientation:o];
+    up = [up imageByApplyingTransform:CGAffineTransformMakeTranslation(-up.extent.origin.x, -up.extent.origin.y)];
+
+    CFTimeInterval now = CACurrentMediaTime();
+    if ((_tick++ & 1) == 0 || !_haveFace) { // الكشف كل إطارين لتخفيف الحرارة
+        EchoFace found;
+        if (fx_find_face(up, &found)) {
+            if (_haveFace) { // تنعيم الحركة
+                found.eyeA = fx_mix(_face.eyeA, found.eyeA, 0.65);
+                found.eyeB = fx_mix(_face.eyeB, found.eyeB, 0.65);
+                found.mouth = fx_mix(_face.mouth, found.mouth, 0.65);
+            }
+            fx_measure(&found);
+            _face = found;
+            _haveFace = YES;
+            _faceTime = now;
+        } else if (!_haveFace || now - _faceTime > 0.5) {
+            _haveFace = NO;
+            _searchTurn++;
+            self.faceSeen = NO;
+            return img;
+        }
+    }
+    self.faceSeen = YES;
+
+    CIImage *result = [self effect:fx on:up face:_face];
+    if (o != 1) result = [result imageByApplyingOrientation:back];
+    CGRect r = result.extent;
+    return [result imageByApplyingTransform:CGAffineTransformMakeTranslation(-r.origin.x, -r.origin.y)];
+}
+
+- (CIImage *)warp:(CIImage *)img name:(NSString *)name at:(CGPoint)p radius:(CGFloat)radius scale:(CGFloat)scale {
+    CIFilter *f = [CIFilter filterWithName:name];
+    if (!f) return img;
+    [f setValue:[img imageByClampingToExtent] forKey:kCIInputImageKey];
+    [f setValue:[CIVector vectorWithX:p.x Y:p.y] forKey:kCIInputCenterKey];
+    [f setValue:@(radius) forKey:kCIInputRadiusKey];
+    [f setValue:@(scale) forKey:kCIInputScaleKey];
+    return f.outputImage ? [f.outputImage imageByCroppingToRect:img.extent] : img;
+}
+
+- (CIImage *)effect:(int)fx on:(CIImage *)img face:(EchoFace)face {
+    CGFloat d = face.eyeDist;
+    CGPoint middle = fx_mix(face.eyes, face.mouth, 0.5);
+    if (fx == FX_BIGEYES) {
+        img = [self warp:img name:@"CIBumpDistortion" at:face.eyeA radius:d * 0.55 scale:0.45];
+        return [self warp:img name:@"CIBumpDistortion" at:face.eyeB radius:d * 0.55 scale:0.45];
+    }
+    if (fx == FX_BIGMOUTH) return [self warp:img name:@"CIBumpDistortion" at:face.mouth radius:d * 0.85 scale:0.55];
+    if (fx == FX_PUFFY)    return [self warp:img name:@"CIBumpDistortion" at:middle radius:d * 1.9 scale:0.4];
+    if (fx == FX_THIN)     return [self warp:img name:@"CIPinchDistortion" at:middle radius:d * 2.0 scale:0.22];
+
+    if (fx == FX_BLURFACE || fx == FX_PIXFACE) {
+        CIImage *hidden = [[img imageByClampingToExtent]
+            imageByApplyingFilter:(fx == FX_BLURFACE ? @"CIGaussianBlur" : @"CIPixellate")
+              withInputParameters:(fx == FX_BLURFACE ? @{ kCIInputRadiusKey: @(d * 0.22) }
+                                                     : @{ kCIInputScaleKey: @(MAX(4.0, d * 0.2)) })];
+        CIFilter *grad = [CIFilter filterWithName:@"CIRadialGradient" withInputParameters:@{
+            kCIInputCenterKey: [CIVector vectorWithX:middle.x Y:middle.y],
+            @"inputRadius0": @(d * 1.35), @"inputRadius1": @(d * 1.6),
+            @"inputColor0": [CIColor colorWithRed:1 green:1 blue:1],
+            @"inputColor1": [CIColor colorWithRed:0 green:0 blue:0] }];
+        return [[hidden imageByApplyingFilter:@"CIBlendWithMask" withInputParameters:@{
+            kCIInputBackgroundImageKey: img, kCIInputMaskImageKey: grad.outputImage }] imageByCroppingToRect:img.extent];
+    }
+
+    if (!_fxArt[fx] && fx != FX_CUSTOM) {
+        UIImage *art = fx_render(^{ fx_draw(fx); });
+        if (art.CGImage) _fxArt[fx] = [CIImage imageWithCGImage:art.CGImage];
+    }
+    CIImage *art = _fxArt[fx];
+    if (!art) return img;
+    // نركّب اللوحة: عينين اللوحة على عينينك، والمقاس والميلان حسب وجهك
+    CGAffineTransform t = CGAffineTransformMakeTranslation(-500, -580);
+    t = CGAffineTransformConcat(t, CGAffineTransformMakeScale(d / 300.0, MAX(face.mouthDist, d * 0.7) / 300.0));
+    t = CGAffineTransformConcat(t, CGAffineTransformMakeRotation(face.angle));
+    t = CGAffineTransformConcat(t, CGAffineTransformMakeTranslation(face.eyes.x, face.eyes.y));
+    return [[[art imageByApplyingTransform:t] imageByCompositingOverImage:img] imageByCroppingToRect:img.extent];
 }
 
 + (instancetype)shared {
@@ -1155,8 +1462,15 @@ static NSString *const kCamFilters[8] = { nil, @"CIPhotoEffectNoir", @"CIPhotoEf
         }
 
         CIImage *img;
-        if (self.mode == CAM_LIVE) img = [CIImage imageWithCVPixelBuffer:src];
-        else img = [self fit:(self.mode == CAM_IMAGE ? _still : [self currentVideoFrame]) into:CGSizeMake(w, h)];
+        if (self.mode == CAM_LIVE) {
+            img = [CIImage imageWithCVPixelBuffer:src];
+            int flip = self.liveFlip;
+            if (flip) {
+                img = [img imageByApplyingOrientation:(flip == 1 ? 2 : 4)];
+                img = [img imageByApplyingTransform:CGAffineTransformMakeTranslation(-img.extent.origin.x, -img.extent.origin.y)];
+            }
+            img = [self applyEffect:img];
+        } else img = [self fit:(self.mode == CAM_IMAGE ? _still : [self currentVideoFrame]) into:CGSizeMake(w, h)];
         img = [self applyFilter:img];
         if (!img) return NULL;
 
@@ -1201,7 +1515,7 @@ static void echo_cam_hook_class(Class cls) {
             if (![output isKindOfClass:AVCaptureVideoDataOutput.class]) { orig(me, sel, output, sb, conn); return; }
             EchoCam *cam = [EchoCam shared];
             cam.frames = cam.frames + 1;
-            if (cam.mode == CAM_LIVE && cam.filter == 0) { orig(me, sel, output, sb, conn); return; }
+            if (cam.mode == CAM_LIVE && cam.filter == 0 && cam.effect == 0 && cam.liveFlip == 0) { orig(me, sel, output, sb, conn); return; }
             @autoreleasepool {
                 CMSampleBufferRef out = [cam copyProcessed:sb];
                 // لو فشلت المعالجة نسقط الإطار، ما نرسل الكاميرا الأصلية
@@ -1263,6 +1577,8 @@ static void echo_cam_install(void) {
 @property (nonatomic, strong) UILabel *camStatus;
 @property (nonatomic, strong) UILabel *camSource;
 @property (nonatomic, strong) NSArray<UIButton *> *camFilterBtns;
+@property (nonatomic, strong) NSArray<UIButton *> *camFxBtns;
+@property (nonatomic) BOOL pickingMask;
 @property (nonatomic, strong) NSURL *camFile;
 @property (nonatomic) unsigned lastCamFrames;
 @property (nonatomic) CFTimeInterval lastCamTime;
@@ -1601,8 +1917,25 @@ static void echo_cam_install(void) {
     [tab addSubview:self.camStatus];
     y += 28;
 
-    y = [self addHeader:@"🎨 الفلاتر" to:tab y:y];
     CGFloat bw = (w - 16) / 3.0;
+    [tab addSubview:[self makeButton:@"⇋ عكس الكاميرا: طافي" frame:CGRectMake(16, y, w, 36) tag:0 action:@selector(camLiveFlip:)]];
+    y += 44;
+
+    y = [self addHeader:@"🎭 مؤثرات الوجه" to:tab y:y];
+    NSMutableArray *fxb = [NSMutableArray array];
+    for (NSInteger i = 0; i < FX_COUNT; i++) {
+        UIButton *b = [self makeButton:kFxNames[i]
+                                 frame:CGRectMake(16 + (i % 3) * (bw + 8), y + (i / 3) * 40, bw, 32)
+                                   tag:i action:@selector(camFxTapped:)];
+        [tab addSubview:b];
+        [fxb addObject:b];
+    }
+    self.camFxBtns = fxb;
+    y += ((FX_COUNT + 2) / 3) * 40 + 2;
+    [tab addSubview:[self makeButton:@"➕ حط قناعك (صورة PNG شفافة)" frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(camPickMask)]];
+    y += 44;
+
+    y = [self addHeader:@"🎨 فلاتر الألوان" to:tab y:y];
     NSMutableArray *btns = [NSMutableArray array];
     for (NSInteger i = 0; i < 8; i++) {
         UIButton *b = [self makeButton:kCamFilterNames[i]
@@ -1634,7 +1967,31 @@ static void echo_cam_install(void) {
     [self refreshCamStatus];
 }
 
+- (void)camLiveFlip:(UIButton *)b {
+    int v = ([EchoCam shared].liveFlip + 1) % 3;
+    [EchoCam shared].liveFlip = v;
+    NSArray *titles = @[@"⇋ عكس الكاميرا: طافي", @"⇋ عكس الكاميرا: وضع 1", @"⇋ عكس الكاميرا: وضع 2"];
+    [b setTitle:titles[v] forState:UIControlStateNormal];
+}
+
+- (void)camFxTapped:(UIButton *)b {
+    if (b.tag == FX_CUSTOM && ![[EchoCam shared] hasCustomMask]) { [self camPickMask]; return; }
+    [EchoCam shared].effect = (int)b.tag;
+    [self refreshCamButtons];
+}
+
+- (void)camPickMask {
+    self.pickingMask = YES;
+    // من الملفات عشان تبقى خلفية PNG شفافة
+    [self openCamFiles];
+}
+
 - (void)refreshCamButtons {
+    int fx = [EchoCam shared].effect;
+    for (UIButton *b in self.camFxBtns) {
+        b.backgroundColor = (b.tag == fx) ? [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95]
+                                          : [UIColor colorWithWhite:1 alpha:0.14];
+    }
     int f = [EchoCam shared].filter;
     for (UIButton *b in self.camFilterBtns) {
         b.backgroundColor = (b.tag == f) ? [UIColor colorWithRed:0.33 green:0.42 blue:1 alpha:0.95]
@@ -1648,6 +2005,9 @@ static void echo_cam_install(void) {
     if (c != self.lastCamFrames) { self.lastCamFrames = c; self.lastCamTime = now; }
     BOOL live = c != 0 && (now - self.lastCamTime) < 0.8;
     self.camStatus.text = live ? @"🟢 ملتقط الكاميرا" : @"🔴 ما وصلني شي من الكاميرا";
+    EchoCam *cam = [EchoCam shared];
+    if (live && cam.effect != FX_NONE && cam.mode == CAM_LIVE)
+        self.camStatus.text = cam.faceSeen ? @"🟢 ملتقط الكاميرا · 🙂 لقيت وجهك" : @"🟢 ملتقط الكاميرا · 🔍 أدور على وجهك";
     self.camStatus.textColor = live ? [UIColor systemGreenColor] : [UIColor systemOrangeColor];
 }
 
@@ -1666,6 +2026,7 @@ static void echo_cam_install(void) {
 }
 
 - (void)camFromPhotos {
+    self.pickingMask = NO;
     if (@available(iOS 14.0, *)) {
         PHPickerConfiguration *cfg = [[PHPickerConfiguration alloc] init];
         cfg.selectionLimit = 1;
@@ -1679,6 +2040,11 @@ static void echo_cam_install(void) {
 }
 
 - (void)camFromFiles {
+    self.pickingMask = NO;
+    [self openCamFiles];
+}
+
+- (void)openCamFiles {
     self.pickingCam = YES;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -1690,7 +2056,7 @@ static void echo_cam_install(void) {
     [self presentViewController:p animated:YES completion:nil];
 }
 
-- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller { self.pickingCam = NO; }
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller { self.pickingCam = NO; self.pickingMask = NO; }
 
 - (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results API_AVAILABLE(ios(14.0)) {
     [picker dismissViewControllerAnimated:YES completion:nil];
@@ -1714,6 +2080,22 @@ static void echo_cam_install(void) {
 
 - (void)loadCamFile:(NSURL *)url video:(BOOL)video {
     if (!url) { self.camSource.text = @"❌ ما قدرت أقرأ الملف"; return; }
+    if (self.pickingMask) {
+        self.pickingMask = NO;
+        UIImage *img = video ? nil : [UIImage imageWithContentsOfFile:url.path];
+        [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
+        if (!img || img.size.width < 1 || img.size.height < 1) { self.camSource.text = @"❌ اختر صورة PNG"; return; }
+        UIImage *canvas = fx_render(^{
+            CGFloat k = MIN(1000.0 / img.size.width, 1000.0 / img.size.height);
+            CGSize z = CGSizeMake(img.size.width * k, img.size.height * k);
+            [img drawInRect:CGRectMake((1000 - z.width) / 2, (1000 - z.height) / 2, z.width, z.height)];
+        });
+        if (!canvas.CGImage) return;
+        [[EchoCam shared] useCustomMask:[CIImage imageWithCGImage:canvas.CGImage]];
+        [EchoCam shared].effect = FX_CUSTOM;
+        [self refreshCamButtons];
+        return;
+    }
     if (video) {
         BOOL ok = [[EchoCam shared] useVideo:url];
         self.camSource.text = ok ? @"المصدر: 🎬 فيديو" : @"❌ ما قدرت أشغل الفيديو (الكام بتطلع سوداء)";
