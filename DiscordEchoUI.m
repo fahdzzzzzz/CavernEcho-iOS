@@ -2800,11 +2800,8 @@ static void echo_cam_install(void) {
         [[EchoCam shared] useCustomMask:[CIImage imageWithCGImage:canvas.CGImage]];
         [EchoCam shared].effect = FX_CUSTOM;
         [self refreshCamButtons];
-        if (@available(iOS 17.0, *)) {
-    self.camSource.text = @"✅ تم تجهيز القناع وإزالة الخلفية تلقائياً";
-} else {
-    self.camSource.text = @"✅ تم تجهيز القناع";
-}
+        self.camSource.text = (@available(iOS 17.0, *) ? @"✅ تم تجهيز القناع وإزالة الخلفية تلقائياً" :
+                                                        @"✅ تم تجهيز القناع");
         return;
     }
     if (video) {
