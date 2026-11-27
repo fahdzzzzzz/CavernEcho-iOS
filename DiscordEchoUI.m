@@ -1431,7 +1431,6 @@ static CIImage *morph_soft_mask(const EchoFace *f, CGSize size, CGFloat mixWeigh
     CGContextRotateCTM(c, f->angle);
     CGContextScaleCTM(c, MAX(1.0, f->eyeDist), MAX(1.0, f->eyeDist));
 
-    // وزن الدمج النهائي (مثال 0.65 يعطي مزج واضح لملامح المصدر مع بقاء ملامح وجهك الأساسية واضحة)
     CGFloat shade = MIN(0.85, MAX(0.25, mixWeight));
     CGContextSetGrayFillColor(c, shade, 1);
 
@@ -1459,7 +1458,6 @@ static CIImage *morph_soft_mask(const EchoFace *f, CGSize size, CGFloat mixWeigh
         CGContextFillEllipseInRect(c, CGRectMake(-rx, cy - ry, rx * 2.0, ry * 2.0));
     }
 
-    // تخفيف الحدة حول العيون حتى تبقى نظرتك وملامح عينيك طبيعية ومتداخلة
     CGContextSetGrayFillColor(c, shade * 0.35, 1);
     paint_eyes_path(c, f, f->eyePtsA, f->nEyeA);
     CGContextFillPath(c);
@@ -1483,7 +1481,6 @@ static CIImage *morph_soft_mask(const EchoFace *f, CGSize size, CGFloat mixWeigh
 static CIImage *swap_apply(CIImage *dstImg, CIImage *srcFaceImg, const EchoFace *srcFace, const EchoFace *dstFace) {
     if (!srcFaceImg || srcFace->eyeDist < 2.0 || dstFace->eyeDist < 2.0) return dstImg;
 
-    // 1. نحت/تحريك ملامح وجهك الأساسية أولاً ليتغير شكل الفك والأنف والوجنتين
     CGFloat d = dstFace->eyeDist;
     CGPoint nose = fx_mix(dstFace->eyes, dstFace->mouth, 0.62);
     CGPoint chin = fx_mix(dstFace->eyes, dstFace->mouth, 1.58);
@@ -1517,7 +1514,6 @@ static CIImage *swap_apply(CIImage *dstImg, CIImage *srcFaceImg, const EchoFace 
         if (bumpChin.outputImage) morphedDst = [bumpChin.outputImage imageByCroppingToRect:dstImg.extent];
     }
 
-    // 2. مطابقة ثلاث نقاط لملامح الوجه المصدر ودمجها بنعومة فوق الوجه المعدّل
     CGAffineTransform t = swap_affine_three_points(
         srcFace->eyeA, srcFace->eyeB, srcFace->mouth,
         dstFace->eyeA, dstFace->eyeB, dstFace->mouth
@@ -1683,8 +1679,6 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
 
     CGContextSetGrayFillColor(c, 1, 1);
     CGContextFillEllipseInRect(c, CGRectMake(-radiusX, centerY - radiusY, radiusX * 2.0, radiusY * 2.0));
-
-    // لا نرسم فتحات للعينين: القناع يغطي العينين بالكامل.
 
     CGImageRef cg = CGBitmapContextCreateImage(c);
     CGContextRelease(c);
@@ -2757,13 +2751,15 @@ static void echo_cam_install(void) {
                 NSError *visionError = nil;
                 if ([handler performRequests:@[request] error:&visionError]) {
                     VNInstanceMaskObservation *observation = request.results.firstObject;
-                    if (observation) {
+                    SEL maskSel = @selector(generateScaledMaskForImageForInstances:fromRequestHandler:croppedToInstancesExtent:error:);
+                    if (observation && [observation respondsToSelector:maskSel]) {
+                        NSIndexSet *instances = [NSIndexSet indexSetWithIndex:0];
                         NSError *maskError = nil;
                         CVPixelBufferRef maskBuffer =
-                            [observation generateScaledMaskForImageForInstances:observation.allInstances
-                                                                           from:handler
-                                                            croppedToInstancesExtent:NO
-                                                                              error:&maskError];
+                            [observation generateScaledMaskForImageForInstances:instances
+                                                             fromRequestHandler:handler
+                                                       croppedToInstancesExtent:NO
+                                                                          error:&maskError];
                         if (maskBuffer) {
                             CIImage *sourceCI = [CIImage imageWithCGImage:sourceCG];
                             CIImage *maskCI = [CIImage imageWithCVPixelBuffer:maskBuffer];
