@@ -2738,46 +2738,63 @@ static void echo_cam_install(void) {
             return;
         }
 
-        // إزالة الخلفية تلقائياً على iOS 17+ باستخدام Vision.
-        // إذا لم تتوفر الميزة أو لم يتم العثور على مقدمة واضحة، نستخدم الصورة الأصلية.
+        // إزالة الخلفية تلقائياً على iOS 17+ باستخدام Vision عبر الاستدعاء الديناميكي
+        // لتفادي أخطاء الترجمة على إصدارات SDK الأقدم.
         UIImage *cutout = img;
+        BOOL removedBG = NO;
+
         if (@available(iOS 17.0, *)) {
             CGImageRef sourceCG = img.CGImage;
-            if (sourceCG) {
-                VNGenerateForegroundInstanceMaskRequest *request =
-                    [[VNGenerateForegroundInstanceMaskRequest alloc] init];
+            Class reqCls = NSClassFromString(@"VNGenerateForegroundInstanceMaskRequest");
+            if (sourceCG && reqCls) {
+                VNImageBasedRequest *request = [[reqCls alloc] init];
                 VNImageRequestHandler *handler =
                     [[VNImageRequestHandler alloc] initWithCGImage:sourceCG options:@{}];
                 NSError *visionError = nil;
                 if ([handler performRequests:@[request] error:&visionError]) {
-                    VNInstanceMaskObservation *observation = request.results.firstObject;
-                    SEL maskSel = @selector(generateScaledMaskForImageForInstances:fromRequestHandler:croppedToInstancesExtent:error:);
+                    id observation = request.results.firstObject;
+                    SEL maskSel = NSSelectorFromString(@"generateScaledMaskForImageForInstances:fromRequestHandler:croppedToInstancesExtent:error:");
                     if (observation && [observation respondsToSelector:maskSel]) {
-                        NSIndexSet *instances = [NSIndexSet indexSetWithIndex:0];
-                        NSError *maskError = nil;
-                        CVPixelBufferRef maskBuffer =
-                            [observation generateScaledMaskForImageForInstances:instances
-                                                             fromRequestHandler:handler
-                                                       croppedToInstancesExtent:NO
-                                                                          error:&maskError];
-                        if (maskBuffer) {
-                            CIImage *sourceCI = [CIImage imageWithCGImage:sourceCG];
-                            CIImage *maskCI = [CIImage imageWithCVPixelBuffer:maskBuffer];
-                            CIImage *clearBG = [CIImage imageWithColor:[CIColor colorWithRed:0 green:0 blue:0 alpha:0]];
-                            CIImage *result = [sourceCI imageByApplyingFilter:@"CIBlendWithMask"
-                                withInputParameters:@{
-                                    kCIInputBackgroundImageKey: clearBG,
-                                    kCIInputMaskImageKey: maskCI
-                                }];
-                            CIContext *context = [CIContext contextWithOptions:nil];
-                            CGImageRef resultCG = [context createCGImage:result fromRect:sourceCI.extent];
-                            if (resultCG) {
-                                cutout = [UIImage imageWithCGImage:resultCG
-                                                             scale:img.scale
-                                                       orientation:img.imageOrientation];
-                                CGImageRelease(resultCG);
+                        NSMethodSignature *sig = [observation methodSignatureForSelector:maskSel];
+                        if (sig) {
+                            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                            [inv setTarget:observation];
+                            [inv setSelector:maskSel];
+
+                            NSIndexSet *instances = [NSIndexSet indexSetWithIndex:0];
+                            BOOL cropped = NO;
+                            NSError *maskError = nil;
+                            NSError * __autoreleasing *errPtr = &maskError;
+
+                            [inv setArgument:&instances atIndex:2];
+                            [inv setArgument:&handler atIndex:3];
+                            [inv setArgument:&cropped atIndex:4];
+                            [inv setArgument:&errPtr atIndex:5];
+                            [inv invoke];
+
+                            CVPixelBufferRef maskBuffer = NULL;
+                            [inv getReturnValue:&maskBuffer];
+
+                            if (maskBuffer) {
+                                CIImage *sourceCI = [CIImage imageWithCGImage:sourceCG];
+                                CIImage *maskCI = [CIImage imageWithCVPixelBuffer:maskBuffer];
+                                CIImage *clearBG = [CIImage imageWithColor:[CIColor colorWithRed:0 green:0 blue:0 alpha:0]];
+                                CIImage *result = [sourceCI imageByApplyingFilter:@"CIBlendWithMask"
+                                    withInputParameters:@{
+                                        kCIInputBackgroundImageKey: clearBG,
+                                        kCIInputMaskImageKey: maskCI
+                                    }];
+                                CIContext *context = [CIContext contextWithOptions:nil];
+                                CGImageRef resultCG = [context createCGImage:result fromRect:sourceCI.extent];
+                                if (resultCG) {
+                                    cutout = [UIImage imageWithCGImage:resultCG
+                                                                 scale:img.scale
+                                                           orientation:img.imageOrientation];
+                                    CGImageRelease(resultCG);
+                                    removedBG = YES;
+                                }
+                                CVPixelBufferRelease(maskBuffer);
                             }
-                            CVPixelBufferRelease(maskBuffer);
                         }
                     }
                 }
@@ -2796,8 +2813,11 @@ static void echo_cam_install(void) {
         [[EchoCam shared] useCustomMask:[CIImage imageWithCGImage:canvas.CGImage]];
         [EchoCam shared].effect = FX_CUSTOM;
         [self refreshCamButtons];
-        self.camSource.text = (@available(iOS 17.0, *) ? @"✅ تم تجهيز القناع وإزالة الخلفية تلقائياً" :
-                                                        @"✅ تم تجهيز القناع");
+        if (removedBG) {
+            self.camSource.text = @"✅ تم تجهيز القناع وإزالة الخلفية تلقائياً";
+        } else {
+            self.camSource.text = @"✅ تم تجهيز القناع";
+        }
         return;
     }
     if (video) {
