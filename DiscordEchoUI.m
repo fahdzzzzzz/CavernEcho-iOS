@@ -2805,7 +2805,6 @@ static void echo_cam_install(void) {
 } else {
     self.camSource.text = @"✅ تم تجهيز القناع";
 }
-                                                        @"✅ تم تجهيز القناع");
         return;
     }
     if (video) {
