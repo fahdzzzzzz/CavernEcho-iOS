@@ -1684,11 +1684,7 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     CGContextSetGrayFillColor(c, 1, 1);
     CGContextFillEllipseInRect(c, CGRectMake(-radiusX, centerY - radiusY, radiusX * 2.0, radiusY * 2.0));
 
-    CGContextSetGrayFillColor(c, 0, 1);
-    paint_eyes_path(c, face, face->eyePtsA, face->nEyeA);
-    CGContextFillPath(c);
-    paint_eyes_path(c, face, face->eyePtsB, face->nEyeB);
-    CGContextFillPath(c);
+    // لا نرسم فتحات للعينين: القناع يغطي العينين بالكامل.
 
     CGImageRef cg = CGBitmapContextCreateImage(c);
     CGContextRelease(c);
@@ -2508,7 +2504,7 @@ static void echo_cam_install(void) {
     y += ((FX_COUNT + 2) / 3) * 40 + 2;
     [tab addSubview:[self makeButton:@"✨ دمج ملامح وجه من الصور" frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(camPickSwapFace)]];
     y += 40;
-    [tab addSubview:[self makeButton:@"➕ حط قناعك (صورة PNG شفافة)" frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(camPickMask)]];
+    [tab addSubview:[self makeButton:@"➕ حط قناعك (من استوديو الصور)" frame:CGRectMake(16, y, w, 34) tag:0 action:@selector(camPickMask)]];
     y += 44;
 
     y = [self addHeader:@"🎨 فلاتر الألوان" to:tab y:y];
@@ -2596,8 +2592,20 @@ static void echo_cam_install(void) {
 
 - (void)camPickMask {
     self.pickingSwapFace = NO;
+    self.pickingCam = NO;
     self.pickingMask = YES;
-    [self openCamFiles];
+
+    if (@available(iOS 14.0, *)) {
+        PHPickerConfiguration *cfg = [[PHPickerConfiguration alloc] init];
+        cfg.selectionLimit = 1;
+        cfg.filter = PHPickerFilter.imagesFilter;
+        PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:cfg];
+        picker.delegate = self;
+        [self presentViewController:picker animated:YES completion:nil];
+    } else {
+        self.pickingMask = NO;
+        self.camSource.text = @"❌ اختيار القناع من الصور يحتاج iOS 14 أو أحدث";
+    }
 }
 
 - (void)refreshCamButtons {
@@ -2683,6 +2691,8 @@ static void echo_cam_install(void) {
     NSItemProvider *item = results.firstObject.itemProvider;
     if (!item) {
         self.pickingSwapFace = NO;
+        self.pickingMask = NO;
+        self.pickingCam = NO;
         return;
     }
     BOOL video = !self.pickingSwapFace && [item hasItemConformingToTypeIdentifier:@"public.movie"];
@@ -2729,16 +2739,69 @@ static void echo_cam_install(void) {
         self.pickingMask = NO;
         UIImage *img = video ? nil : [UIImage imageWithContentsOfFile:url.path];
         [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
-        if (!img || img.size.width < 1 || img.size.height < 1) { self.camSource.text = @"❌ اختر صورة PNG"; return; }
+        if (!img || img.size.width < 1 || img.size.height < 1) {
+            self.camSource.text = @"❌ اختر صورة وجه من الاستوديو";
+            return;
+        }
+
+        // إزالة الخلفية تلقائياً على iOS 17+ باستخدام Vision.
+        // إذا لم تتوفر الميزة أو لم يتم العثور على مقدمة واضحة، نستخدم الصورة الأصلية.
+        UIImage *cutout = img;
+        if (@available(iOS 17.0, *)) {
+            CGImageRef sourceCG = img.CGImage;
+            if (sourceCG) {
+                VNGenerateForegroundInstanceMaskRequest *request =
+                    [[VNGenerateForegroundInstanceMaskRequest alloc] init];
+                VNImageRequestHandler *handler =
+                    [[VNImageRequestHandler alloc] initWithCGImage:sourceCG options:@{}];
+                NSError *visionError = nil;
+                if ([handler performRequests:@[request] error:&visionError]) {
+                    VNInstanceMaskObservation *observation = request.results.firstObject;
+                    if (observation) {
+                        NSError *maskError = nil;
+                        CVPixelBufferRef maskBuffer =
+                            [observation generateScaledMaskForImageForInstances:observation.allInstances
+                                                                           from:handler
+                                                            croppedToInstancesExtent:NO
+                                                                              error:&maskError];
+                        if (maskBuffer) {
+                            CIImage *sourceCI = [CIImage imageWithCGImage:sourceCG];
+                            CIImage *maskCI = [CIImage imageWithCVPixelBuffer:maskBuffer];
+                            CIImage *clearBG = [CIImage imageWithColor:[CIColor colorWithRed:0 green:0 blue:0 alpha:0]];
+                            CIImage *result = [sourceCI imageByApplyingFilter:@"CIBlendWithMask"
+                                withInputParameters:@{
+                                    kCIInputBackgroundImageKey: clearBG,
+                                    kCIInputMaskImageKey: maskCI
+                                }];
+                            CIContext *context = [CIContext contextWithOptions:nil];
+                            CGImageRef resultCG = [context createCGImage:result fromRect:sourceCI.extent];
+                            if (resultCG) {
+                                cutout = [UIImage imageWithCGImage:resultCG
+                                                             scale:img.scale
+                                                       orientation:img.imageOrientation];
+                                CGImageRelease(resultCG);
+                            }
+                            CVPixelBufferRelease(maskBuffer);
+                        }
+                    }
+                }
+            }
+        }
+
         UIImage *canvas = fx_render(^{
-            CGFloat k = MIN(1000.0 / img.size.width, 1000.0 / img.size.height);
-            CGSize z = CGSizeMake(img.size.width * k, img.size.height * k);
-            [img drawInRect:CGRectMake((1000 - z.width) / 2, (1000 - z.height) / 2, z.width, z.height)];
+            CGFloat k = MIN(1000.0 / cutout.size.width, 1000.0 / cutout.size.height);
+            CGSize z = CGSizeMake(cutout.size.width * k, cutout.size.height * k);
+            [cutout drawInRect:CGRectMake((1000 - z.width) / 2, (1000 - z.height) / 2, z.width, z.height)];
         });
-        if (!canvas.CGImage) return;
+        if (!canvas.CGImage) {
+            self.camSource.text = @"❌ ما قدرت أعالج صورة القناع";
+            return;
+        }
         [[EchoCam shared] useCustomMask:[CIImage imageWithCGImage:canvas.CGImage]];
         [EchoCam shared].effect = FX_CUSTOM;
         [self refreshCamButtons];
+        self.camSource.text = (@available(iOS 17.0, *) ? @"✅ تم تجهيز القناع وإزالة الخلفية تلقائياً" :
+                                                        @"✅ تم تجهيز القناع");
         return;
     }
     if (video) {
