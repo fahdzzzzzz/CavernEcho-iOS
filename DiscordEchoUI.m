@@ -1659,6 +1659,30 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     @synchronized (self) { return _fxArt[FX_CUSTOM] != nil; }
 }
 
+// لون البشرة: متوسط لون الخدين من الإطار الحالي (يتغير مع الإضاءة)
+- (CIImage *)skinCoverFor:(CIImage *)img face:(const EchoFace *)face {
+    CGPoint mouthLocal = paint_local(face, face->mouth);
+    CGFloat d = face->eyeDist, cs = cos(face->angle), sn = sin(face->angle);
+    CGFloat side = MAX(2.0, d * 0.22);
+    CIImage *samples[2] = { nil, nil };
+    for (int i = 0; i < 2; i++) {
+        CGFloat lx = i ? 0.55 : -0.55, ly = mouthLocal.y * 0.52;
+        CGPoint p = CGPointMake(face->eyes.x + d * (lx * cs - ly * sn),
+                                face->eyes.y + d * (lx * sn + ly * cs));
+        CGRect box = CGRectIntersection(CGRectMake(p.x - side / 2, p.y - side / 2, side, side), img.extent);
+        if (CGRectIsEmpty(box)) continue;
+        CIImage *avg = [img imageByApplyingFilter:@"CIAreaAverage"
+            withInputParameters:@{ kCIInputExtentKey: [CIVector vectorWithCGRect:box] }];
+        samples[i] = [avg imageByClampingToExtent];
+    }
+    CIImage *skin = samples[0] ?: samples[1];
+    if (samples[0] && samples[1])
+        skin = [samples[0] imageByApplyingFilter:@"CIDissolveTransition"
+            withInputParameters:@{ kCIInputTargetImageKey: samples[1], kCIInputTimeKey: @0.5 }];
+    if (!skin) skin = [CIImage imageWithColor:[CIColor colorWithRed:0.72 green:0.54 blue:0.43]];
+    return [skin imageByCroppingToRect:img.extent];
+}
+
 - (CIImage *)customFaceMaskForSize:(CGSize)size face:(const EchoFace *)face {
     CGFloat k = MIN(1.0, 640.0 / MAX(size.width, size.height));
     size_t w = MAX(1, (size_t)(size.width * k)), h = MAX(1, (size_t)(size.height * k));
@@ -1677,12 +1701,32 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     CGContextScaleCTM(c, face->eyeDist, face->eyeDist);
 
     CGPoint mouthLocal = paint_local(face, face->mouth);
-    CGFloat centerY = mouthLocal.y * 0.45;
-    CGFloat radiusX = 1.6;
-    CGFloat radiusY = MAX(2.0, fabs(mouthLocal.y) * 1.9);
-
     CGContextSetGrayFillColor(c, 1, 1);
-    CGContextFillEllipseInRect(c, CGRectMake(-radiusX, centerY - radiusY, radiusX * 2.0, radiusY * 2.0));
+
+    int count = face->nContour;
+    if (count >= 5) {
+        // حدود الوجه: خط الفك من الكاميرا + قوس للجبهة
+        CGPoint q[MAX_PTS + 5];
+        int n = 0;
+        BOOL leftFirst = paint_local(face, face->contour[0]).x < paint_local(face, face->contour[count - 1]).x;
+        for (int i = 0; i < count; i++) {
+            CGPoint p = paint_local(face, face->contour[leftFirst ? i : count - 1 - i]);
+            q[n++] = CGPointMake(p.x * 1.06, p.y < 0 ? p.y * 1.05 : p.y);
+        }
+        CGFloat lx = q[0].x, rx = q[n - 1].x;
+        q[n++] = CGPointMake(rx * 0.96, 0.45);
+        q[n++] = CGPointMake(rx * 0.68, 0.76);
+        q[n++] = CGPointMake(0, 0.88);
+        q[n++] = CGPointMake(lx * 0.68, 0.76);
+        q[n++] = CGPointMake(lx * 0.96, 0.45);
+        paint_smooth(c, q, n);
+        CGContextFillPath(c);
+    } else {
+        // احتياط إذا ما انقرأ خط الفك
+        CGFloat centerY = mouthLocal.y * 0.52;
+        CGFloat radiusY = MAX(1.05, fabs(mouthLocal.y) * 1.38);
+        CGContextFillEllipseInRect(c, CGRectMake(-1.1, centerY - radiusY, 2.2, radiusY * 2.0));
+    }
 
     // لا نرسم فتحات للعينين: القناع يغطي العينين بالكامل.
 
@@ -1847,17 +1891,17 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
         CIImage *warpedCustom = [[custom imageByApplyingTransform:t] imageByCroppingToRect:img.extent];
         CIImage *coverMask = [self customFaceMaskForSize:img.extent.size face:&face];
         // لو فشل تجهيز الغطاء ما نعرض الوجه الحقيقي
-        CIImage *cover = [[CIImage imageWithColor:[CIColor colorWithRed:0.08 green:0.08 blue:0.1]]
-                          imageByCroppingToRect:img.extent];
-        if (!coverMask) return cover;
+        if (!coverMask)
+            return [[CIImage imageWithColor:[CIColor colorWithRed:0.08 green:0.08 blue:0.1]]
+                    imageByCroppingToRect:img.extent];
 
-        // 1) غطاء معتم فوق الوجه كامل  2) صورة القناع فوقه بدون قص
-        CIImage *hidden = [cover imageByApplyingFilter:@"CIBlendWithMask"
+        // 1) لون البشرة  2) صورة القناع فوقه  3) الاثنين داخل حدود الوجه فقط
+        CIImage *covered = [warpedCustom imageByCompositingOverImage:[self skinCoverFor:img face:&face]];
+        return [[covered imageByApplyingFilter:@"CIBlendWithMask"
             withInputParameters:@{
                 kCIInputBackgroundImageKey: img,
                 kCIInputMaskImageKey: coverMask
-            }];
-        return [[warpedCustom imageByCompositingOverImage:hidden] imageByCroppingToRect:img.extent];
+            }] imageByCroppingToRect:img.extent];
     }
 
     if (!_fxArt[fx]) {
