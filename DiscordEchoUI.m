@@ -1677,9 +1677,9 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
     CGContextScaleCTM(c, face->eyeDist, face->eyeDist);
 
     CGPoint mouthLocal = paint_local(face, face->mouth);
-    CGFloat centerY = mouthLocal.y * 0.52;
-    CGFloat radiusX = 1.05;
-    CGFloat radiusY = MAX(1.05, fabs(mouthLocal.y) * 1.38);
+    CGFloat centerY = mouthLocal.y * 0.45;
+    CGFloat radiusX = 1.6;
+    CGFloat radiusY = MAX(2.0, fabs(mouthLocal.y) * 1.9);
 
     CGContextSetGrayFillColor(c, 1, 1);
     CGContextFillEllipseInRect(c, CGRectMake(-radiusX, centerY - radiusY, radiusX * 2.0, radiusY * 2.0));
@@ -1735,11 +1735,19 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
             _face = found;
             _haveFace = YES;
             _faceTime = now;
-        } else if (!_haveFace || now - _faceTime > 0.5) {
-            _haveFace = NO;
-            _searchTurn++;
-            self.faceSeen = NO;
-            return img;
+        } else {
+            BOOL hiding = (fx == FX_CUSTOM && _fxArt[FX_CUSTOM] != nil);
+            // مع القناع ما نعتمد على موقع قديم للوجه إلا لحظة قصيرة جداً
+            if (!_haveFace || now - _faceTime > (hiding ? 0.15 : 0.5)) {
+                _haveFace = NO;
+                _searchTurn++;
+                self.faceSeen = NO;
+                // إذا ضاع الوجه نغطي الصورة كلها عشان ما تبان ملامحك
+                if (hiding)
+                    return [[CIImage imageWithColor:[CIColor colorWithRed:0.08 green:0.08 blue:0.1]]
+                            imageByCroppingToRect:img.extent];
+                return img;
+            }
         }
     }
     self.faceSeen = YES;
@@ -1837,18 +1845,19 @@ static NSString *const kShapeNames[SHAPE_COUNT] = { @"العيون", @"الفم"
         t = CGAffineTransformConcat(t, CGAffineTransformMakeTranslation(face.eyes.x, face.eyes.y));
 
         CIImage *warpedCustom = [[custom imageByApplyingTransform:t] imageByCroppingToRect:img.extent];
-        CIImage *faceMask = [self customFaceMaskForSize:img.extent.size face:&face];
+        CIImage *coverMask = [self customFaceMaskForSize:img.extent.size face:&face];
+        // لو فشل تجهيز الغطاء ما نعرض الوجه الحقيقي
+        CIImage *cover = [[CIImage imageWithColor:[CIColor colorWithRed:0.08 green:0.08 blue:0.1]]
+                          imageByCroppingToRect:img.extent];
+        if (!coverMask) return cover;
 
-        if (faceMask) {
-            CIImage *maskedCustom = [warpedCustom imageByApplyingFilter:@"CIBlendWithMask"
-                withInputParameters:@{
-                    kCIInputBackgroundImageKey: [CIImage imageWithColor:[CIColor clearColor]],
-                    kCIInputMaskImageKey: faceMask
-                }];
-            return [[maskedCustom imageByCompositingOverImage:img] imageByCroppingToRect:img.extent];
-        }
-
-        return [[warpedCustom imageByCompositingOverImage:img] imageByCroppingToRect:img.extent];
+        // 1) غطاء معتم فوق الوجه كامل  2) صورة القناع فوقه بدون قص
+        CIImage *hidden = [cover imageByApplyingFilter:@"CIBlendWithMask"
+            withInputParameters:@{
+                kCIInputBackgroundImageKey: img,
+                kCIInputMaskImageKey: coverMask
+            }];
+        return [[warpedCustom imageByCompositingOverImage:hidden] imageByCroppingToRect:img.extent];
     }
 
     if (!_fxArt[fx]) {
